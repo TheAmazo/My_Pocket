@@ -1,0 +1,26 @@
+# Android Studio
+.idea/
+*.iml
+
+# Gradle
+.gradle/
+build/
+app/build/
+
+# Kotlin
+.kotlin/
+
+# Local machine config
+local.properties
+
+# Firebase local app config
+google-services.json
+app/google-services.json
+
+# OS files
+.DS_Store
+
+# Signing and secrets
+*.jks
+*.keystore
+*.properties.local

@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">My Pocket</string>
+    <string name="notification_channel_savings">Savings reminders</string>
+    <string name="notification_channel_savings_description">Daily reminders when no money has been marked saved.</string>
+</resources>

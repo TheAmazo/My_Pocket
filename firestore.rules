@@ -1,0 +1,59 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function pocketPath(pocketId) {
+      return /databases/$(database)/documents/pockets/$(pocketId);
+    }
+
+    function isPocketMember(pocketId) {
+      return signedIn()
+        && exists(pocketPath(pocketId))
+        && request.auth.uid in get(pocketPath(pocketId)).data.memberIds;
+    }
+
+    function isJoiningWithInvite(pocketId) {
+      return signedIn()
+        && request.resource.data.memberIds.hasAll(resource.data.memberIds)
+        && request.auth.uid in request.resource.data.memberIds
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'memberIds',
+          'updatedAt'
+        ]);
+    }
+
+    match /users/{userId} {
+      allow read, create, update: if signedIn() && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
+    match /inviteCodes/{code} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.createdBy == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /pockets/{pocketId} {
+      allow read: if isPocketMember(pocketId);
+      allow create: if signedIn()
+        && request.auth.uid == request.resource.data.createdBy
+        && request.auth.uid in request.resource.data.memberIds;
+      allow update: if isPocketMember(pocketId) || isJoiningWithInvite(pocketId);
+      allow delete: if false;
+
+      match /months/{monthId} {
+        allow read, create, update: if isPocketMember(pocketId);
+        allow delete: if false;
+
+        match /cells/{cellId} {
+          allow read, create, update: if isPocketMember(pocketId);
+          allow delete: if false;
+        }
+      }
+    }
+  }
+}
