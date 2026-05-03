@@ -18,11 +18,16 @@ object SavingsBoardGenerator {
 
     val allowedAmounts: Set<Int> = weightedAmounts.map { it.first }.toSet()
 
-    fun generate(monthKey: String, pocketId: String, count: Int = DEFAULT_CELL_COUNT): List<Int> {
+    fun generate(
+        monthKey: String,
+        pocketId: String,
+        round: Int = 0,
+        count: Int = DEFAULT_CELL_COUNT,
+    ): List<Int> {
         require(count > 0) { "Board must contain at least one cell." }
 
         val totalWeight = weightedAmounts.sumOf { it.second }
-        val random = Random("$monthKey:$pocketId".hashCode())
+        val random = Random("$monthKey:$pocketId:$round".hashCode())
 
         return List(count) {
             val pick = random.nextInt(totalWeight)
@@ -40,5 +45,14 @@ object SavingsBoardGenerator {
 
     fun todayKey(zoneId: ZoneId = ZoneId.systemDefault()): String {
         return LocalDate.now(zoneId).toString()
+    }
+
+    fun currentYear(zoneId: ZoneId = ZoneId.systemDefault()): Int {
+        return YearMonth.now(zoneId).year
+    }
+
+    fun isBeforeMonthEnd(monthKey: String, zoneId: ZoneId = ZoneId.systemDefault()): Boolean {
+        val month = YearMonth.parse(monthKey)
+        return LocalDate.now(zoneId).dayOfMonth < month.lengthOfMonth()
     }
 }

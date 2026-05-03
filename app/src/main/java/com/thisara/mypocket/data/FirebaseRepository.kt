@@ -15,6 +15,7 @@ import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.tasks.await
+import java.time.YearMonth
 import java.util.Locale
 import kotlin.random.Random
 
@@ -103,6 +104,27 @@ class FirebaseRepository(private val context: Context) {
             }
     }
 
+    fun listenUserPockets(
+        onPockets: (List<Pocket>) -> Unit,
+        onError: (Throwable) -> Unit,
+    ): ListenerRegistration? {
+        val uid = auth.currentUser?.uid ?: return null
+        return db.collection(POCKETS)
+            .whereArrayContains("memberIds", uid)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    onError(error)
+                    return@addSnapshotListener
+                }
+                onPockets(
+                    snapshot?.documents
+                        .orEmpty()
+                        .mapNotNull { it.toPocket() }
+                        .sortedBy { it.name.lowercase(Locale.US) },
+                )
+            }
+    }
+
     fun listenPocket(
         pocketId: String,
         onPocket: (Pocket?) -> Unit,
@@ -138,6 +160,33 @@ class FirebaseRepository(private val context: Context) {
                 }
                 val cells = snapshot?.documents.orEmpty().mapNotNull { it.toSavingsCell() }
                 onBoard(MonthBoard(monthKey = monthKey, cells = cells))
+            }
+    }
+
+    fun listenYearSummaries(
+        pocketId: String,
+        year: Int,
+        onSummaries: (List<MonthSummary>) -> Unit,
+        onError: (Throwable) -> Unit,
+    ): ListenerRegistration {
+        val start = "$year-01"
+        val end = "$year-12"
+        return db.collection(POCKETS)
+            .document(pocketId)
+            .collection(MONTHS)
+            .whereGreaterThanOrEqualTo("monthKey", start)
+            .whereLessThanOrEqualTo("monthKey", end)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    onError(error)
+                    return@addSnapshotListener
+                }
+                onSummaries(
+                    snapshot?.documents
+                        .orEmpty()
+                        .mapNotNull { it.toMonthSummary() }
+                        .sortedByDescending { it.monthKey },
+                )
             }
     }
 
@@ -183,6 +232,21 @@ class FirebaseRepository(private val context: Context) {
         return pocketRef.id
     }
 
+    suspend fun switchPocket(pocketId: String) {
+        val user = requireNotNull(auth.currentUser)
+        db.collection(USERS)
+            .document(user.uid)
+            .set(
+                mapOf(
+                    "currentPocketId" to pocketId,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                ),
+                SetOptions.merge(),
+            )
+            .await()
+        ensureMonthBoard(pocketId, SavingsBoardGenerator.currentMonthKey())
+    }
+
     suspend fun joinPocket(inviteCode: String): String {
         val user = requireNotNull(auth.currentUser)
         val normalizedCode = inviteCode.trim().uppercase(Locale.US)
@@ -220,13 +284,18 @@ class FirebaseRepository(private val context: Context) {
             .document(monthKey)
 
         val monthExists = monthRef.get().await().exists()
-        val firstCellExists = monthRef.collection(CELLS)
-            .document("00")
+        val cellsSnapshot = monthRef.collection(CELLS)
             .get()
             .await()
-            .exists()
+        val hasBaseCells = cellsSnapshot.size() >= SavingsBoardGenerator.DEFAULT_CELL_COUNT
+        val hasSavedDayFields = cellsSnapshot.documents
+            .filter { it.getBoolean("saved") == true }
+            .all { it.contains("savedDayKey") }
 
-        if (monthExists && firstCellExists) return
+        if (monthExists && hasBaseCells && hasSavedDayFields) {
+            syncMonthSummary(pocketId, monthKey)
+            return
+        }
 
         val amounts = SavingsBoardGenerator.generate(monthKey, pocketId)
         val batch = db.batch()
@@ -234,16 +303,21 @@ class FirebaseRepository(private val context: Context) {
             monthRef,
             mapOf(
                 "monthKey" to monthKey,
+                "year" to YearMonth.parse(monthKey).year,
                 "cellCount" to amounts.size,
                 "targetTotal" to amounts.sum(),
+                "savedTotal" to cellsSnapshot.documents
+                    .mapNotNull { it.toSavingsCell() }
+                    .filter { it.saved }
+                    .sumOf { it.amount },
                 "createdAt" to FieldValue.serverTimestamp(),
             ),
             SetOptions.merge(),
         )
         amounts.forEachIndexed { index, amount ->
             val cellId = index.toString().padStart(2, '0')
-            batch.set(
-                monthRef.collection(CELLS).document(cellId),
+            val existing = cellsSnapshot.documents.firstOrNull { it.id == cellId }
+            val cellData = if (existing == null) {
                 mapOf(
                     "index" to index,
                     "amount" to amount,
@@ -251,10 +325,27 @@ class FirebaseRepository(private val context: Context) {
                     "savedByUid" to null,
                     "savedByName" to null,
                     "savedAtMillis" to null,
-                ),
+                    "savedDayKey" to null,
+                    "round" to 0,
+                )
+            } else {
+                buildMap {
+                    put("index", index)
+                    put("amount", existing.getLong("amount")?.toInt() ?: amount)
+                    put("round", existing.getLong("round")?.toInt() ?: 0)
+                    if (!existing.contains("savedDayKey")) {
+                        put("savedDayKey", null)
+                    }
+                }
+            }
+            batch.set(
+                monthRef.collection(CELLS).document(cellId),
+                cellData,
+                SetOptions.merge(),
             )
         }
         batch.commit().await()
+        syncMonthSummary(pocketId, monthKey)
     }
 
     suspend fun toggleCell(pocketId: String, monthKey: String, cell: SavingsCell): Boolean {
@@ -267,12 +358,18 @@ class FirebaseRepository(private val context: Context) {
             .document(cell.id)
 
         val willSave = !cell.saved
+        val todayKey = SavingsBoardGenerator.todayKey()
+        if (!willSave && cell.savedDayKey != todayKey) {
+            throw IllegalStateException("This cell was saved on another day and is now locked.")
+        }
+
         val update = if (willSave) {
             mapOf(
                 "saved" to true,
                 "savedByUid" to user.uid,
                 "savedByName" to (user.displayName ?: user.email?.substringBefore("@") ?: "Member"),
                 "savedAtMillis" to System.currentTimeMillis(),
+                "savedDayKey" to todayKey,
             )
         } else {
             mapOf(
@@ -280,10 +377,86 @@ class FirebaseRepository(private val context: Context) {
                 "savedByUid" to null,
                 "savedByName" to null,
                 "savedAtMillis" to null,
+                "savedDayKey" to null,
             )
         }
         ref.update(update).await()
+        syncMonthSummary(pocketId, monthKey)
+        ensureNextRoundIfComplete(pocketId, monthKey)
         return willSave
+    }
+
+    private suspend fun ensureNextRoundIfComplete(pocketId: String, monthKey: String) {
+        if (!SavingsBoardGenerator.isBeforeMonthEnd(monthKey)) return
+
+        val monthRef = db.collection(POCKETS)
+            .document(pocketId)
+            .collection(MONTHS)
+            .document(monthKey)
+        val cells = monthRef.collection(CELLS).get().await().documents
+            .mapNotNull { it.toSavingsCell() }
+            .sortedBy { it.index }
+        if (cells.isEmpty() || cells.any { !it.saved }) return
+
+        val nextRound = (cells.size / SavingsBoardGenerator.DEFAULT_CELL_COUNT)
+        val startIndex = (cells.maxOfOrNull { it.index } ?: -1) + 1
+        val amounts = SavingsBoardGenerator.generate(monthKey, pocketId, round = nextRound)
+        val batch = db.batch()
+        amounts.forEachIndexed { offset, amount ->
+            val index = startIndex + offset
+            val cellId = index.toString().padStart(3, '0')
+            batch.set(
+                monthRef.collection(CELLS).document(cellId),
+                mapOf(
+                    "index" to index,
+                    "amount" to amount,
+                    "saved" to false,
+                    "savedByUid" to null,
+                    "savedByName" to null,
+                    "savedAtMillis" to null,
+                    "savedDayKey" to null,
+                    "round" to nextRound,
+                ),
+            )
+        }
+        batch.set(
+            monthRef,
+            mapOf(
+                "monthKey" to monthKey,
+                "year" to YearMonth.parse(monthKey).year,
+                "cellCount" to cells.size + amounts.size,
+                "targetTotal" to cells.sumOf { it.amount } + amounts.sum(),
+                "updatedAt" to FieldValue.serverTimestamp(),
+            ),
+            SetOptions.merge(),
+        )
+        batch.commit().await()
+        syncMonthSummary(pocketId, monthKey)
+    }
+
+    private suspend fun syncMonthSummary(pocketId: String, monthKey: String) {
+        val monthRef = db.collection(POCKETS)
+            .document(pocketId)
+            .collection(MONTHS)
+            .document(monthKey)
+        val cells = monthRef.collection(CELLS)
+            .get()
+            .await()
+            .documents
+            .mapNotNull { it.toSavingsCell() }
+
+        monthRef.set(
+            mapOf(
+                "monthKey" to monthKey,
+                "year" to YearMonth.parse(monthKey).year,
+                "cellCount" to cells.size,
+                "savedCount" to cells.count { it.saved },
+                "targetTotal" to cells.sumOf { it.amount },
+                "savedTotal" to cells.filter { it.saved }.sumOf { it.amount },
+                "updatedAt" to FieldValue.serverTimestamp(),
+            ),
+            SetOptions.merge(),
+        ).await()
     }
 
     private suspend fun upsertUserDocument(user: FirebaseUser, fallbackName: String) {
@@ -363,6 +536,19 @@ class FirebaseRepository(private val context: Context) {
             savedByUid = getString("savedByUid"),
             savedByName = getString("savedByName"),
             savedAtMillis = getLong("savedAtMillis"),
+            savedDayKey = getString("savedDayKey"),
+        )
+    }
+
+    private fun DocumentSnapshot.toMonthSummary(): MonthSummary? {
+        if (!exists()) return null
+        val monthKey = getString("monthKey") ?: id
+        return MonthSummary(
+            monthKey = monthKey,
+            targetTotal = getLong("targetTotal")?.toInt() ?: 0,
+            savedTotal = getLong("savedTotal")?.toInt() ?: 0,
+            savedCount = getLong("savedCount")?.toInt() ?: 0,
+            cellCount = getLong("cellCount")?.toInt() ?: 0,
         )
     }
 

@@ -30,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Email
@@ -95,8 +96,12 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.thisara.mypocket.data.AppSettings
 import com.thisara.mypocket.data.MonthBoard
+import com.thisara.mypocket.data.MonthSummary
 import com.thisara.mypocket.data.Pocket
 import com.thisara.mypocket.data.SavingsCell
+import com.thisara.mypocket.data.canToggle
+import com.thisara.mypocket.data.isLocked
+import com.thisara.mypocket.data.sortRank
 import com.thisara.mypocket.ui.theme.PocketBlue
 import com.thisara.mypocket.ui.theme.PocketInk
 import com.thisara.mypocket.ui.theme.PocketMist
@@ -170,7 +175,10 @@ fun MyPocketApp(viewModel: MainViewModel) {
                     onSignOut = viewModel::signOut,
                 )
 
-                state.needsPocket -> PocketSetupScreen(
+                state.needsPocket || state.showPocketPicker -> PocketSelectorScreen(
+                    pockets = state.pockets,
+                    currentPocketId = state.pocket?.id,
+                    onSelect = viewModel::switchPocket,
                     onCreate = viewModel::createPocket,
                     onJoin = viewModel::joinPocket,
                     onSignOut = viewModel::signOut,
@@ -180,6 +188,7 @@ fun MyPocketApp(viewModel: MainViewModel) {
                     state = state,
                     settings = settings,
                     onTab = viewModel::setTab,
+                    onShowPockets = viewModel::showPocketPicker,
                     onToggleCell = viewModel::toggleCell,
                     onRepairBoard = viewModel::repairCurrentBoard,
                     onReminderEnabled = viewModel::setRemindersEnabled,
@@ -462,7 +471,10 @@ private fun EmailVerificationScreen(
 }
 
 @Composable
-private fun PocketSetupScreen(
+private fun PocketSelectorScreen(
+    pockets: List<Pocket>,
+    currentPocketId: String?,
+    onSelect: (String) -> Unit,
     onCreate: (String) -> Unit,
     onJoin: (String) -> Unit,
     onSignOut: () -> Unit,
@@ -474,15 +486,46 @@ private fun PocketSetupScreen(
         LazyColumn(verticalArrangement = Arrangement.spacedBy(18.dp)) {
             item {
                 Text(
-                    text = "Set up your shared pocket",
+                    text = "Your pockets",
                     style = MaterialTheme.typography.headlineLarge,
                     fontWeight = FontWeight.Black,
                 )
             }
+            if (pockets.isNotEmpty()) {
+                items(pockets, key = { it.id }) { pocket ->
+                    Surface(
+                        color = if (pocket.id == currentPocketId) PocketMist else Color.White,
+                        shape = RoundedCornerShape(8.dp),
+                        tonalElevation = 1.dp,
+                        shadowElevation = 1.dp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(pocket.id) },
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column {
+                                Text(pocket.name, fontWeight = FontWeight.Black)
+                                Text(
+                                    "Invite ${pocket.inviteCode}",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            if (pocket.id == currentPocketId) {
+                                Icon(Icons.Rounded.Check, contentDescription = null, tint = PocketBlue)
+                            }
+                        }
+                    }
+                }
+            }
             item {
                 SectionSurface {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Create a new pocket", fontWeight = FontWeight.Bold)
+                        Text("Create another pocket", fontWeight = FontWeight.Bold)
                         OutlinedTextField(
                             value = pocketName,
                             onValueChange = { pocketName = it },
@@ -532,6 +575,7 @@ private fun HomeScreen(
     state: MainUiState,
     settings: AppSettings,
     onTab: (HomeTab) -> Unit,
+    onShowPockets: () -> Unit,
     onToggleCell: (SavingsCell) -> Unit,
     onRepairBoard: () -> Unit,
     onReminderEnabled: (Boolean) -> Unit,
@@ -541,6 +585,11 @@ private fun HomeScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = onShowPockets) {
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Pockets")
+                    }
+                },
                 title = {
                     Column {
                         Text("My Pocket", fontWeight = FontWeight.Black)
@@ -566,7 +615,7 @@ private fun HomeScreen(
                     selected = state.selectedTab == HomeTab.History,
                     onClick = { onTab(HomeTab.History) },
                     icon = { Icon(Icons.Rounded.History, contentDescription = null) },
-                    label = { Text("History") },
+                    label = { Text("Summary") },
                 )
                 NavigationBarItem(
                     selected = state.selectedTab == HomeTab.Settings,
@@ -586,10 +635,11 @@ private fun HomeScreen(
             when (state.selectedTab) {
                 HomeTab.Board -> BoardScreen(
                     board = state.board,
+                    todayKey = state.todayKey,
                     onToggleCell = onToggleCell,
                     onRepairBoard = onRepairBoard,
                 )
-                HomeTab.History -> HistoryScreen(state)
+                HomeTab.History -> SummaryScreen(state)
                 HomeTab.Settings -> SettingsScreen(
                     pocket = state.pocket,
                     settings = settings,
@@ -605,6 +655,7 @@ private fun HomeScreen(
 @Composable
 private fun BoardScreen(
     board: MonthBoard?,
+    todayKey: String,
     onToggleCell: (SavingsCell) -> Unit,
     onRepairBoard: () -> Unit,
 ) {
@@ -657,9 +708,16 @@ private fun BoardScreen(
             .padding(horizontal = 16.dp),
     ) {
         item {
+            TodayBanner(todayKey)
+        }
+        item {
             BoardSummary(board)
         }
         item {
+            val sortedCells = board.cells.sortedWith(
+                compareBy<SavingsCell> { it.sortRank(todayKey) }
+                    .thenBy { it.index },
+            )
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 92.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -668,13 +726,38 @@ private fun BoardScreen(
                     .fillMaxWidth()
                     .height(560.dp),
             ) {
-                items(board.cells, key = { it.id }) { cell ->
-                    SavingsCellTile(cell = cell, onClick = { onToggleCell(cell) })
+                items(sortedCells, key = { it.id }) { cell ->
+                    SavingsCellTile(
+                        cell = cell,
+                        todayKey = todayKey,
+                        onClick = { onToggleCell(cell) },
+                    )
                 }
             }
         }
         item {
             Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun TodayBanner(todayKey: String) {
+    Surface(
+        color = PocketMist,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column {
+                Text("Today", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(todayKey, fontWeight = FontWeight.Black)
+            }
+            StatusDot(PocketYellow)
         }
     }
 }
@@ -724,9 +807,19 @@ private fun SummaryTile(label: String, value: String, color: Color, modifier: Mo
 }
 
 @Composable
-private fun SavingsCellTile(cell: SavingsCell, onClick: () -> Unit) {
-    val background = if (cell.saved) PocketBlue else Color.White
-    val content = if (cell.saved) Color.White else PocketInk
+private fun SavingsCellTile(cell: SavingsCell, todayKey: String, onClick: () -> Unit) {
+    val locked = cell.isLocked(todayKey)
+    val canClick = cell.canToggle(todayKey)
+    val background = when {
+        locked -> Color(0xFFE4E7EA)
+        cell.saved -> PocketBlue
+        else -> Color.White
+    }
+    val content = when {
+        locked -> Color(0xFF6B7378)
+        cell.saved -> Color.White
+        else -> PocketInk
+    }
     val borderColor = when (cell.amount) {
         20 -> PocketBlue
         50 -> PocketYellow
@@ -742,7 +835,7 @@ private fun SavingsCellTile(cell: SavingsCell, onClick: () -> Unit) {
         shadowElevation = 1.dp,
         modifier = Modifier
             .aspectRatio(1.05f)
-            .clickable(onClick = onClick),
+            .clickable(enabled = canClick, onClick = onClick),
     ) {
         Column(
             modifier = Modifier.padding(10.dp),
@@ -771,7 +864,11 @@ private fun SavingsCellTile(cell: SavingsCell, onClick: () -> Unit) {
                 )
                 Spacer(Modifier.size(4.dp))
                 Text(
-                    text = if (cell.saved) cell.savedByName ?: "Saved" else "Open",
+                    text = when {
+                        locked -> "Locked"
+                        cell.saved -> "Saved today"
+                        else -> "Open"
+                    },
                     color = content.copy(alpha = 0.82f),
                     fontSize = 11.sp,
                     maxLines = 1,
@@ -783,16 +880,30 @@ private fun SavingsCellTile(cell: SavingsCell, onClick: () -> Unit) {
 }
 
 @Composable
-private fun HistoryScreen(state: MainUiState) {
+private fun SummaryScreen(state: MainUiState) {
     val activity = state.activity
     LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
     ) {
         item {
-            Text("Saved history", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+            Text("Summary", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+        }
+        item {
+            MonthlySummary(state.currentMonthSummary)
+        }
+        item {
+            YearlySummary(
+                year = state.todayKey.take(4),
+                saved = state.yearlySavedTotal,
+                missed = state.yearlyMissedTotal,
+                summaries = state.yearSummaries,
+            )
+        }
+        item {
+            Text("Recent saves", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
         }
         if (activity.isEmpty()) {
             item {
@@ -820,6 +931,63 @@ private fun HistoryScreen(state: MainUiState) {
                         }
                         Text(
                             item.savedAtMillis.formatSavedTime(),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.End,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MonthlySummary(summary: MonthSummary?) {
+    SectionSurface {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("This month", fontWeight = FontWeight.Black)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                SummaryTile("Saved", "Rs. ${summary?.savedTotal ?: 0}", PocketBlue, Modifier.weight(1f))
+                SummaryTile("Did not", "Rs. ${summary?.missedTotal ?: 0}", PocketRose, Modifier.weight(1f))
+            }
+            Text(
+                "${summary?.savedCount ?: 0}/${summary?.cellCount ?: 0} cells completed",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    }
+}
+
+@Composable
+private fun YearlySummary(
+    year: String,
+    saved: Int,
+    missed: Int,
+    summaries: List<MonthSummary>,
+) {
+    SectionSurface {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("$year yearly summary", fontWeight = FontWeight.Black)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                SummaryTile("Saved", "Rs. $saved", PocketOrange, Modifier.weight(1f))
+                SummaryTile("Did not", "Rs. $missed", PocketRose, Modifier.weight(1f))
+            }
+            if (summaries.isEmpty()) {
+                Text(
+                    "No completed month data yet.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            } else {
+                summaries.take(12).forEach { summary ->
+                    Row(
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(summary.monthKey, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Rs. ${summary.savedTotal} saved / Rs. ${summary.missedTotal} did not",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.End,
                         )

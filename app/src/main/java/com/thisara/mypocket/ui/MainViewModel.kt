@@ -11,11 +11,13 @@ import com.thisara.mypocket.data.ActivityItem
 import com.thisara.mypocket.data.AppSettings
 import com.thisara.mypocket.data.FirebaseRepository
 import com.thisara.mypocket.data.MonthBoard
+import com.thisara.mypocket.data.MonthSummary
 import com.thisara.mypocket.data.Pocket
 import com.thisara.mypocket.data.SavingsBoardGenerator
 import com.thisara.mypocket.data.SavingsCell
 import com.thisara.mypocket.data.SettingsStore
 import com.thisara.mypocket.data.UserSession
+import com.thisara.mypocket.data.canToggle
 import com.thisara.mypocket.reminders.ReminderScheduler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -43,12 +45,35 @@ data class MainUiState(
     val selectedTab: HomeTab = HomeTab.Board,
     val user: UserSession? = null,
     val pocket: Pocket? = null,
+    val pockets: List<Pocket> = emptyList(),
     val board: MonthBoard? = null,
+    val yearSummaries: List<MonthSummary> = emptyList(),
+    val showPocketPicker: Boolean = false,
     val message: String? = null,
 ) {
     val isSignedIn: Boolean = user != null
     val needsEmailVerification: Boolean = user != null && !user.isEmailVerified
-    val needsPocket: Boolean = user != null && user.isEmailVerified && pocket == null
+    val needsPocket: Boolean = user != null && user.isEmailVerified && (pockets.isEmpty() || pocket == null)
+    val todayKey: String = SavingsBoardGenerator.todayKey()
+    val currentMonthSummary: MonthSummary?
+        get() {
+            val monthKey = board?.monthKey ?: SavingsBoardGenerator.currentMonthKey()
+            val boardSnapshot = board
+            return if (boardSnapshot != null) {
+                MonthSummary(
+                    monthKey = monthKey,
+                    targetTotal = boardSnapshot.targetTotal,
+                    savedTotal = boardSnapshot.savedTotal,
+                    savedCount = boardSnapshot.savedCount,
+                    cellCount = boardSnapshot.cells.size,
+                )
+            } else {
+                yearSummaries.firstOrNull { it.monthKey == monthKey }
+            }
+        }
+    val yearlySavedTotal: Int = yearSummaries.sumOf { it.savedTotal }
+    val yearlyTargetTotal: Int = yearSummaries.sumOf { it.targetTotal }
+    val yearlyMissedTotal: Int = (yearlyTargetTotal - yearlySavedTotal).coerceAtLeast(0)
     val activity: List<ActivityItem> = board?.cells
         .orEmpty()
         .filter { it.saved && it.savedAtMillis != null }
@@ -79,8 +104,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private var authListener: FirebaseAuth.AuthStateListener? = null
     private var userRegistration: ListenerRegistration? = null
+    private var pocketsRegistration: ListenerRegistration? = null
     private var pocketRegistration: ListenerRegistration? = null
     private var boardRegistration: ListenerRegistration? = null
+    private var summariesRegistration: ListenerRegistration? = null
     private var activePocketId: String? = null
 
     init {
@@ -112,6 +139,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearMessage() {
         mutableState.update { it.copy(message = null) }
+    }
+
+    fun showPocketPicker() {
+        mutableState.update { it.copy(showPocketPicker = true, selectedTab = HomeTab.Board) }
     }
 
     fun signUp(name: String, email: String, password: String, confirmPassword: String) {
@@ -178,6 +209,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         runLoading {
             repository.createPocket(name)
+            mutableState.update { it.copy(showPocketPicker = false) }
         }
     }
 
@@ -189,12 +221,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         runLoading {
             repository.joinPocket(inviteCode)
+            mutableState.update { it.copy(showPocketPicker = false) }
+        }
+    }
+
+    fun switchPocket(pocketId: String) {
+        if (pocketId == mutableState.value.pocket?.id) {
+            mutableState.update { it.copy(showPocketPicker = false) }
+            return
+        }
+
+        runLoading {
+            mutableState.update { it.copy(board = null, showPocketPicker = false) }
+            repository.switchPocket(pocketId)
         }
     }
 
     fun toggleCell(cell: SavingsCell) {
         val pocket = mutableState.value.pocket ?: return
         val board = mutableState.value.board ?: return
+        val todayKey = SavingsBoardGenerator.todayKey()
+        if (!cell.canToggle(todayKey)) {
+            mutableState.update { it.copy(message = "That saved cell is locked because the day has passed.") }
+            return
+        }
 
         runLoading(showLoading = false) {
             val saved = repository.toggleCell(pocket.id, board.monthKey, cell)
@@ -251,14 +301,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 user = session,
                 pocket = if (session.isEmailVerified) it.pocket else null,
                 board = if (session.isEmailVerified) it.board else null,
+                pockets = if (session.isEmailVerified) it.pockets else emptyList(),
             )
         }
 
         if (session.isEmailVerified) {
             startUserPocketListener()
+            startUserPocketsListener()
         } else {
             stopFirestoreListeners()
         }
+    }
+
+    private fun startUserPocketsListener() {
+        pocketsRegistration?.remove()
+        pocketsRegistration = repository.listenUserPockets(
+            onPockets = { pockets ->
+                mutableState.update {
+                    it.copy(
+                        pockets = pockets,
+                        showPocketPicker = if (pockets.isEmpty()) true else it.showPocketPicker,
+                    )
+                }
+            },
+            onError = ::showError,
+        )
     }
 
     private fun startUserPocketListener() {
@@ -292,6 +359,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             },
             onError = ::showError,
         )
+        summariesRegistration?.remove()
+        summariesRegistration = repository.listenYearSummaries(
+            pocketId = pocketId,
+            year = SavingsBoardGenerator.currentYear(),
+            onSummaries = { summaries ->
+                mutableState.update { it.copy(yearSummaries = summaries) }
+            },
+            onError = ::showError,
+        )
 
         viewModelScope.launch {
             runCatching {
@@ -318,11 +394,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun stopFirestoreListeners() {
         userRegistration?.remove()
+        pocketsRegistration?.remove()
         pocketRegistration?.remove()
         boardRegistration?.remove()
+        summariesRegistration?.remove()
         userRegistration = null
+        pocketsRegistration = null
         pocketRegistration = null
         boardRegistration = null
+        summariesRegistration = null
     }
 
     private fun runLoading(showLoading: Boolean = true, block: suspend () -> Unit) {

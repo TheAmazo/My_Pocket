@@ -23,6 +23,7 @@ data class SavingsCell(
     val savedByUid: String? = null,
     val savedByName: String? = null,
     val savedAtMillis: Long? = null,
+    val savedDayKey: String? = null,
 )
 
 data class MonthBoard(
@@ -33,6 +34,7 @@ data class MonthBoard(
     val savedTotal: Int = cells.filter { it.saved }.sumOf { it.amount }
     val remainingTotal: Int = targetTotal - savedTotal
     val savedCount: Int = cells.count { it.saved }
+    val isComplete: Boolean = cells.isNotEmpty() && savedCount == cells.size
 }
 
 data class ActivityItem(
@@ -40,3 +42,29 @@ data class ActivityItem(
     val savedByName: String,
     val savedAtMillis: Long,
 )
+
+data class MonthSummary(
+    val monthKey: String,
+    val targetTotal: Int,
+    val savedTotal: Int,
+    val savedCount: Int,
+    val cellCount: Int,
+) {
+    val missedTotal: Int = (targetTotal - savedTotal).coerceAtLeast(0)
+}
+
+fun SavingsCell.isLocked(todayKey: String): Boolean {
+    return saved && savedDayKey != todayKey
+}
+
+fun SavingsCell.canToggle(todayKey: String): Boolean {
+    return !isLocked(todayKey)
+}
+
+fun SavingsCell.sortRank(todayKey: String): Int {
+    return when {
+        isLocked(todayKey) -> 2
+        saved -> 1
+        else -> 0
+    }
+}

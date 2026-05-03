@@ -22,6 +22,14 @@ class SavingsBoardGeneratorTest {
     }
 
     @Test
+    fun generatedBoardChangesWhenRoundChanges() {
+        val firstRound = SavingsBoardGenerator.generate("2026-05", "pocket-a", round = 0)
+        val secondRound = SavingsBoardGenerator.generate("2026-05", "pocket-a", round = 1)
+
+        assertTrue(firstRound != secondRound)
+    }
+
+    @Test
     fun generatedBoardChangesWhenMonthChanges() {
         val may = SavingsBoardGenerator.generate("2026-05", "pocket-a")
         val june = SavingsBoardGenerator.generate("2026-06", "pocket-a")
