@@ -2,6 +2,8 @@ package com.thisara.mypocket.ui
 
 import android.app.Application
 import android.content.Intent
+import android.net.Uri
+import android.util.Patterns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.auth.FirebaseAuth
@@ -26,6 +28,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 
 enum class AuthMode {
     Landing,
@@ -37,6 +41,7 @@ enum class HomeTab {
     Board,
     History,
     Settings,
+    Profile,
 }
 
 data class MainUiState(
@@ -48,6 +53,10 @@ data class MainUiState(
     val pockets: List<Pocket> = emptyList(),
     val board: MonthBoard? = null,
     val yearSummaries: List<MonthSummary> = emptyList(),
+    val selectedSummaryYear: Int = SavingsBoardGenerator.currentYear(),
+    val selectedSummaryMonthKey: String? = null,
+    val selectedMonthSavedCells: List<SavingsCell> = emptyList(),
+    val selectedMonthLoading: Boolean = false,
     val showPocketPicker: Boolean = false,
     val message: String? = null,
 ) {
@@ -74,6 +83,8 @@ data class MainUiState(
     val yearlySavedTotal: Int = yearSummaries.sumOf { it.savedTotal }
     val yearlyTargetTotal: Int = yearSummaries.sumOf { it.targetTotal }
     val yearlyMissedTotal: Int = (yearlyTargetTotal - yearlySavedTotal).coerceAtLeast(0)
+    val selectedMonthSummary: MonthSummary?
+        get() = selectedSummaryMonthKey?.let(::summaryForMonth)
     val activity: List<ActivityItem> = board?.cells
         .orEmpty()
         .filter { it.saved && it.savedAtMillis != null }
@@ -81,10 +92,25 @@ data class MainUiState(
         .map {
             ActivityItem(
                 amount = it.amount,
-                savedByName = it.savedByName ?: "Member",
+                savedByName = it.savedByName ?: "You",
                 savedAtMillis = it.savedAtMillis ?: 0L,
             )
         }
+
+    fun summaryForMonth(monthKey: String): MonthSummary? {
+        val boardSnapshot = board
+        return if (boardSnapshot != null && boardSnapshot.monthKey == monthKey) {
+            MonthSummary(
+                monthKey = monthKey,
+                targetTotal = boardSnapshot.targetTotal,
+                savedTotal = boardSnapshot.savedTotal,
+                savedCount = boardSnapshot.savedCount,
+                cellCount = boardSnapshot.cells.size,
+            )
+        } else {
+            yearSummaries.firstOrNull { it.monthKey == monthKey }
+        }
+    }
 }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -108,6 +134,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var pocketRegistration: ListenerRegistration? = null
     private var boardRegistration: ListenerRegistration? = null
     private var summariesRegistration: ListenerRegistration? = null
+    private var selectedMonthRegistration: ListenerRegistration? = null
     private var activePocketId: String? = null
 
     init {
@@ -186,6 +213,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun googleAccountDeleteIntent(): Intent? {
+        return try {
+            repository.googleSignInIntent()
+        } catch (error: Throwable) {
+            mutableState.update { it.copy(message = error.message ?: "Google reauthentication is not ready yet.") }
+            null
+        }
+    }
+
+    fun completeGoogleAccountDeletion(data: Intent?) {
+        runLoading {
+            repository.reauthenticateWithGoogle(data)
+            repository.deleteAccountAfterRecentLogin()
+            stopFirestoreListeners()
+            mutableState.value = MainUiState(loading = false)
+        }
+    }
+
     fun sendVerificationEmail() {
         runLoading {
             repository.sendVerificationEmail()
@@ -202,26 +247,68 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun createPocket(name: String) {
-        if (name.isBlank()) {
-            mutableState.update { it.copy(message = "Give your shared pocket a name.") }
+        val cleanName = name.cleanPocketName()
+        if (cleanName.isBlank()) {
+            mutableState.update { it.copy(message = "Give your pocket a name.") }
+            return
+        }
+        if (cleanName.length > MAX_POCKET_NAME_LENGTH) {
+            mutableState.update { it.copy(message = "Pocket name must be $MAX_POCKET_NAME_LENGTH characters or less.") }
+            return
+        }
+        if (hasPocketName(cleanName)) {
+            mutableState.update { it.copy(message = "You already have a pocket with that name.") }
             return
         }
 
         runLoading {
-            repository.createPocket(name)
+            repository.createPocket(cleanName)
             mutableState.update { it.copy(showPocketPicker = false) }
         }
     }
 
-    fun joinPocket(inviteCode: String) {
-        if (inviteCode.isBlank()) {
-            mutableState.update { it.copy(message = "Enter the invite code.") }
+    fun renamePocket(pocketId: String, name: String) {
+        val cleanName = name.cleanPocketName()
+        if (cleanName.isBlank()) {
+            mutableState.update { it.copy(message = "Pocket name cannot be blank.") }
+            return
+        }
+        if (cleanName.length > MAX_POCKET_NAME_LENGTH) {
+            mutableState.update { it.copy(message = "Pocket name must be $MAX_POCKET_NAME_LENGTH characters or less.") }
+            return
+        }
+        if (hasPocketName(cleanName, excludePocketId = pocketId)) {
+            mutableState.update { it.copy(message = "You already have a pocket with that name.") }
             return
         }
 
         runLoading {
-            repository.joinPocket(inviteCode)
-            mutableState.update { it.copy(showPocketPicker = false) }
+            repository.renamePocket(pocketId, cleanName)
+            mutableState.update { it.copy(message = "Pocket renamed.") }
+        }
+    }
+
+    fun deletePocket(pocketId: String) {
+        val state = mutableState.value
+        val nextPocketId = state.pockets.firstOrNull { it.id != pocketId }?.id
+        val isCurrentPocket = state.pocket?.id == pocketId
+        runLoading {
+            repository.deletePocket(
+                pocketId = pocketId,
+                isCurrentPocket = isCurrentPocket,
+                nextPocketId = nextPocketId,
+            )
+            mutableState.update {
+                it.copy(
+                    board = if (isCurrentPocket) null else it.board,
+                    pocket = if (isCurrentPocket && nextPocketId == null) null else it.pocket,
+                    yearSummaries = if (isCurrentPocket) emptyList() else it.yearSummaries,
+                    selectedSummaryMonthKey = null,
+                    selectedMonthSavedCells = emptyList(),
+                    selectedMonthLoading = false,
+                    message = "Pocket deleted.",
+                )
+            }
         }
     }
 
@@ -232,7 +319,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         runLoading {
-            mutableState.update { it.copy(board = null, showPocketPicker = false) }
+            selectedMonthRegistration?.remove()
+            selectedMonthRegistration = null
+            mutableState.update {
+                it.copy(
+                    board = null,
+                    yearSummaries = emptyList(),
+                    selectedSummaryYear = SavingsBoardGenerator.currentYear(),
+                    selectedSummaryMonthKey = null,
+                    selectedMonthSavedCells = emptyList(),
+                    selectedMonthLoading = false,
+                    showPocketPicker = false,
+                )
+            }
             repository.switchPocket(pocketId)
         }
     }
@@ -260,6 +359,113 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             mutableState.update {
                 it.copy(message = "Board checked. It should appear in a moment.")
             }
+        }
+    }
+
+    fun previousSummaryYear() {
+        setSummaryYear(mutableState.value.selectedSummaryYear - 1)
+    }
+
+    fun nextSummaryYear() {
+        setSummaryYear(mutableState.value.selectedSummaryYear + 1)
+    }
+
+    fun openSummaryMonth(monthKey: String) {
+        val pocketId = activePocketId ?: mutableState.value.pocket?.id ?: return
+        selectedMonthRegistration?.remove()
+        mutableState.update {
+            it.copy(
+                selectedSummaryMonthKey = monthKey,
+                selectedMonthSavedCells = emptyList(),
+                selectedMonthLoading = true,
+            )
+        }
+        selectedMonthRegistration = repository.listenSavedCellsForMonth(
+            pocketId = pocketId,
+            monthKey = monthKey,
+            onCells = { cells ->
+                mutableState.update {
+                    it.copy(
+                        selectedMonthSavedCells = cells,
+                        selectedMonthLoading = false,
+                    )
+                }
+            },
+            onError = ::showError,
+        )
+    }
+
+    fun closeSummaryMonth() {
+        selectedMonthRegistration?.remove()
+        selectedMonthRegistration = null
+        mutableState.update {
+            it.copy(
+                selectedSummaryMonthKey = null,
+                selectedMonthSavedCells = emptyList(),
+                selectedMonthLoading = false,
+            )
+        }
+    }
+
+    fun updateProfilePhoto(uri: Uri) {
+        runLoading {
+            val session = repository.updateProfilePhoto(uri)
+            mutableState.update { it.copy(user = session, message = "Profile photo updated.") }
+        }
+    }
+
+    fun deleteProfilePhoto() {
+        runLoading {
+            val session = repository.deleteProfilePhoto()
+            mutableState.update { it.copy(user = session, message = "Profile photo deleted.") }
+        }
+    }
+
+    fun updateDisplayName(name: String) {
+        val cleanName = name.cleanPocketName()
+        if (cleanName.isBlank()) {
+            mutableState.update { it.copy(message = "Name cannot be blank.") }
+            return
+        }
+        if (cleanName.length > MAX_DISPLAY_NAME_LENGTH) {
+            mutableState.update { it.copy(message = "Name must be $MAX_DISPLAY_NAME_LENGTH characters or less.") }
+            return
+        }
+
+        runLoading {
+            val session = repository.updateDisplayName(cleanName)
+            mutableState.update { it.copy(user = session, message = "Name updated.") }
+        }
+    }
+
+    fun changePassword(currentPassword: String, newPassword: String, confirmPassword: String) {
+        val validation = when {
+            currentPassword.isBlank() -> "Enter your current password."
+            passwordSecurityMessage(newPassword) != null -> passwordSecurityMessage(newPassword)
+            newPassword != confirmPassword -> "New passwords do not match."
+            else -> null
+        }
+        if (validation != null) {
+            mutableState.update { it.copy(message = validation) }
+            return
+        }
+
+        runLoading {
+            repository.changePassword(currentPassword, newPassword)
+            mutableState.update { it.copy(message = "Password changed.") }
+        }
+    }
+
+    fun deleteAccountWithPassword(currentPassword: String) {
+        if (currentPassword.isBlank()) {
+            mutableState.update { it.copy(message = "Enter your current password to delete this account.") }
+            return
+        }
+
+        runLoading {
+            repository.deleteAccountWithPassword(currentPassword)
+            stopFirestoreListeners()
+            mutableState.value = MainUiState(loading = false)
         }
     }
 
@@ -330,14 +536,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun startUserPocketListener() {
         userRegistration?.remove()
-        userRegistration = repository.listenUserPocketId(
-            onPocketId = { pocketId ->
+        userRegistration = repository.listenUserDocument(
+            onUserDocument = { user, pocketId ->
+                mutableState.update { it.copy(user = user) }
                 if (pocketId == null) {
                     activePocketId = null
                     pocketRegistration?.remove()
                     boardRegistration?.remove()
-                    mutableState.update { it.copy(pocket = null, board = null, loading = false) }
-                    return@listenUserPocketId
+                    summariesRegistration?.remove()
+                    selectedMonthRegistration?.remove()
+                    mutableState.update {
+                        it.copy(
+                            pocket = null,
+                            board = null,
+                            yearSummaries = emptyList(),
+                            selectedSummaryMonthKey = null,
+                            selectedMonthSavedCells = emptyList(),
+                            selectedMonthLoading = false,
+                            loading = false,
+                        )
+                    }
+                    return@listenUserDocument
                 }
 
                 if (activePocketId != pocketId) {
@@ -352,6 +571,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun startPocketListener(pocketId: String) {
         pocketRegistration?.remove()
         boardRegistration?.remove()
+        selectedMonthRegistration?.remove()
+        selectedMonthRegistration = null
+        val currentYear = SavingsBoardGenerator.currentYear()
+        mutableState.update {
+            it.copy(
+                yearSummaries = emptyList(),
+                selectedSummaryYear = currentYear,
+                selectedSummaryMonthKey = null,
+                selectedMonthSavedCells = emptyList(),
+                selectedMonthLoading = false,
+            )
+        }
         pocketRegistration = repository.listenPocket(
             pocketId = pocketId,
             onPocket = { pocket ->
@@ -359,37 +590,61 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             },
             onError = ::showError,
         )
+        startSummaryListener(pocketId, currentYear)
+
+        viewModelScope.launch {
+            runCatching {
+                withTimeout(FIREBASE_ACTION_TIMEOUT_MILLIS) {
+                    val monthKey = SavingsBoardGenerator.currentMonthKey()
+                    boardRegistration = repository.listenMonthBoard(
+                        pocketId = pocketId,
+                        monthKey = monthKey,
+                        onBoard = { board ->
+                            mutableState.update { it.copy(board = board, loading = false) }
+                            if (board.cells.isEmpty()) {
+                                viewModelScope.launch {
+                                    runCatching {
+                                        withTimeout(FIREBASE_ACTION_TIMEOUT_MILLIS) {
+                                            repository.ensureMonthBoard(pocketId, monthKey)
+                                        }
+                                    }.onFailure(::showError)
+                                }
+                            }
+                        },
+                        onError = ::showError,
+                    )
+                    repository.ensureMonthBoard(pocketId, monthKey)
+                }
+            }.onFailure(::showError)
+        }
+    }
+
+    private fun setSummaryYear(year: Int) {
+        val pocketId = activePocketId ?: mutableState.value.pocket?.id ?: return
+        selectedMonthRegistration?.remove()
+        selectedMonthRegistration = null
+        mutableState.update {
+            it.copy(
+                selectedSummaryYear = year,
+                selectedSummaryMonthKey = null,
+                selectedMonthSavedCells = emptyList(),
+                selectedMonthLoading = false,
+                yearSummaries = emptyList(),
+            )
+        }
+        startSummaryListener(pocketId, year)
+    }
+
+    private fun startSummaryListener(pocketId: String, year: Int) {
         summariesRegistration?.remove()
         summariesRegistration = repository.listenYearSummaries(
             pocketId = pocketId,
-            year = SavingsBoardGenerator.currentYear(),
+            year = year,
             onSummaries = { summaries ->
                 mutableState.update { it.copy(yearSummaries = summaries) }
             },
             onError = ::showError,
         )
-
-        viewModelScope.launch {
-            runCatching {
-                val monthKey = SavingsBoardGenerator.currentMonthKey()
-                repository.ensureMonthBoard(pocketId, monthKey)
-                boardRegistration = repository.listenMonthBoard(
-                    pocketId = pocketId,
-                    monthKey = monthKey,
-                    onBoard = { board ->
-                        mutableState.update { it.copy(board = board, loading = false) }
-                        if (board.cells.isEmpty()) {
-                            viewModelScope.launch {
-                                runCatching {
-                                    repository.ensureMonthBoard(pocketId, monthKey)
-                                }.onFailure(::showError)
-                            }
-                        }
-                    },
-                    onError = ::showError,
-                )
-            }.onFailure(::showError)
-        }
     }
 
     private fun stopFirestoreListeners() {
@@ -398,17 +653,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pocketRegistration?.remove()
         boardRegistration?.remove()
         summariesRegistration?.remove()
+        selectedMonthRegistration?.remove()
         userRegistration = null
         pocketsRegistration = null
         pocketRegistration = null
         boardRegistration = null
         summariesRegistration = null
+        selectedMonthRegistration = null
     }
 
     private fun runLoading(showLoading: Boolean = true, block: suspend () -> Unit) {
         viewModelScope.launch {
             if (showLoading) mutableState.update { it.copy(loading = true, message = null) }
-            runCatching { block() }
+            runCatching {
+                withTimeout(FIREBASE_ACTION_TIMEOUT_MILLIS) {
+                    block()
+                }
+            }
                 .onFailure(::showError)
             if (showLoading) mutableState.update { it.copy(loading = false) }
         }
@@ -420,7 +681,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             onSessionChanged(session)
             if (session?.isEmailVerified == true) {
                 mutableState.update {
-                    it.copy(message = "Email verified. Set up your shared pocket.")
+                    it.copy(message = "Email verified. Create your first pocket.")
                 }
             }
         }
@@ -436,13 +697,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun Throwable.userMessage(): String {
-        return if (
-            this is FirebaseFirestoreException &&
-            code == FirebaseFirestoreException.Code.PERMISSION_DENIED
-        ) {
-            "Firestore rules are not published yet. Open Firebase Console, create Firestore, then publish firestore.rules."
-        } else {
-            message ?: "Something went wrong. Try again."
+        return when {
+            this is TimeoutCancellationException -> {
+                "Firebase is taking too long. Check the emulator internet connection, then try again."
+            }
+            this is FirebaseFirestoreException && code == FirebaseFirestoreException.Code.UNAVAILABLE -> {
+                "Firestore is offline. Check the emulator internet connection, then try again."
+            }
+            this is FirebaseFirestoreException && code == FirebaseFirestoreException.Code.PERMISSION_DENIED -> {
+                "Firestore rules are not published yet. Open Firebase Console, create Firestore, then publish firestore.rules."
+            }
+            else -> message ?: "Something went wrong. Try again."
         }
     }
 
@@ -454,9 +719,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ): String? {
         return when {
             name.isBlank() -> "Enter your name."
-            "@" !in email -> "Enter a valid email address."
-            password.length < 6 -> "Password must be at least 6 characters."
+            name.cleanPocketName().length > MAX_DISPLAY_NAME_LENGTH -> "Name must be $MAX_DISPLAY_NAME_LENGTH characters or less."
+            !Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches() -> "Enter a valid email address."
+            passwordSecurityMessage(password) != null -> passwordSecurityMessage(password)
             password != confirmPassword -> "Passwords do not match."
+            else -> null
+        }
+    }
+
+    private fun hasPocketName(name: String, excludePocketId: String? = null): Boolean {
+        val normalizedName = name.normalizedForCompare()
+        return mutableState.value.pockets.any { pocket ->
+            pocket.id != excludePocketId && pocket.name.normalizedForCompare() == normalizedName
+        }
+    }
+
+    private fun String.cleanPocketName(): String {
+        return trim().replace(Regex("\\s+"), " ")
+    }
+
+    private fun String.normalizedForCompare(): String {
+        return cleanPocketName().lowercase()
+    }
+
+    private fun passwordSecurityMessage(password: String): String? {
+        return when {
+            password.length < MIN_PASSWORD_LENGTH -> "Password must be at least $MIN_PASSWORD_LENGTH characters."
+            password.none { it.isLetter() } -> "Password must include at least one letter."
+            password.none { it.isDigit() } -> "Password must include at least one number."
             else -> null
         }
     }
@@ -468,5 +758,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .putBoolean("reminders_enabled", appSettings.remindersEnabled)
             .putInt("reminder_hour", appSettings.reminderHour)
             .apply()
+    }
+
+    private companion object {
+        const val FIREBASE_ACTION_TIMEOUT_MILLIS = 15_000L
+        const val MAX_DISPLAY_NAME_LENGTH = 80
+        const val MAX_POCKET_NAME_LENGTH = 40
+        const val MIN_PASSWORD_LENGTH = 8
     }
 }

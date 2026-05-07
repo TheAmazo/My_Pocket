@@ -16,6 +16,8 @@ local.properties
 # Firebase local app config
 google-services.json
 app/google-services.json
+firestore-debug.log
+firebase-debug.log
 
 # OS files
 .DS_Store
@@ -23,4 +25,6 @@ app/google-services.json
 # Signing and secrets
 *.jks
 *.keystore
+*.pem
+*.p12
 *.properties.local

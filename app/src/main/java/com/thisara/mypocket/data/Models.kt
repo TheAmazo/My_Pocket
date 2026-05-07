@@ -4,6 +4,9 @@ data class UserSession(
     val uid: String,
     val name: String,
     val email: String,
+    val photoData: String?,
+    val createdAtMillis: Long?,
+    val lastLoginAtMillis: Long?,
     val isEmailVerified: Boolean,
     val isGoogleUser: Boolean,
 )
@@ -11,8 +14,6 @@ data class UserSession(
 data class Pocket(
     val id: String,
     val name: String,
-    val inviteCode: String,
-    val memberIds: List<String>,
 )
 
 data class SavingsCell(

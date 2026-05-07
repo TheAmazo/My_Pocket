@@ -2,12 +2,18 @@ package com.thisara.mypocket.data
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.util.Base64
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.firebase.auth.EmailAuthProvider
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.UserProfileChangeRequest
+import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
@@ -15,9 +21,9 @@ import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.tasks.await
+import java.io.ByteArrayOutputStream
 import java.time.YearMonth
 import java.util.Locale
-import kotlin.random.Random
 
 class FirebaseRepository(private val context: Context) {
     private val auth = FirebaseAuth.getInstance()
@@ -81,18 +87,123 @@ class FirebaseRepository(private val context: Context) {
         val result = auth.signInWithCredential(credential).await()
         val user = requireNotNull(result.user)
         runCatching {
-            upsertUserDocument(user, user.displayName ?: account.email?.substringBefore("@") ?: "Member")
+            upsertUserDocument(user, user.displayName ?: account.email?.substringBefore("@") ?: "You")
         }.onFailure { error ->
             if (!error.isPermissionDenied()) throw error
         }
+    }
+
+    suspend fun updateDisplayName(name: String): UserSession {
+        val user = requireNotNull(auth.currentUser)
+        val trimmedName = name.cleanName()
+        user.updateProfile(
+            UserProfileChangeRequest.Builder()
+                .setDisplayName(trimmedName)
+                .build(),
+        ).await()
+        db.collection(USERS)
+            .document(user.uid)
+            .set(
+                mapOf(
+                    "name" to trimmedName,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                ),
+                SetOptions.merge(),
+            )
+            .await()
+        return user.toSession()
+    }
+
+    suspend fun updateProfilePhoto(imageUri: Uri): UserSession {
+        val user = requireNotNull(auth.currentUser)
+        val photoData = compressAvatarToDataUri(imageUri)
+        user.updateProfile(
+            UserProfileChangeRequest.Builder()
+                .setPhotoUri(null)
+                .build(),
+        ).await()
+        db.collection(USERS)
+            .document(user.uid)
+            .set(
+                mapOf(
+                    "photoData" to photoData,
+                    "photoUrl" to FieldValue.delete(),
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                ),
+                SetOptions.merge(),
+            )
+            .await()
+        return user.toSession(photoData = photoData)
+    }
+
+    suspend fun deleteProfilePhoto(): UserSession {
+        val user = requireNotNull(auth.currentUser)
+        user.updateProfile(
+            UserProfileChangeRequest.Builder()
+                .setPhotoUri(null)
+                .build(),
+        ).await()
+        db.collection(USERS)
+            .document(user.uid)
+            .set(
+                mapOf(
+                    "photoData" to FieldValue.delete(),
+                    "photoUrl" to FieldValue.delete(),
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                ),
+                SetOptions.merge(),
+            )
+            .await()
+        return user.toSession(photoData = null)
+    }
+
+    suspend fun changePassword(currentPassword: String, newPassword: String) {
+        val user = requireNotNull(auth.currentUser)
+        val email = requireNotNull(user.email)
+        val credential = EmailAuthProvider.getCredential(email, currentPassword)
+        user.reauthenticate(credential).await()
+        user.updatePassword(newPassword).await()
+    }
+
+    suspend fun reauthenticateWithGoogle(data: Intent?) {
+        val account = GoogleSignIn.getSignedInAccountFromIntent(data).await()
+        val credential = GoogleAuthProvider.getCredential(account.idToken, null)
+        requireNotNull(auth.currentUser).reauthenticate(credential).await()
+    }
+
+    suspend fun deleteAccountWithPassword(currentPassword: String) {
+        val user = requireNotNull(auth.currentUser)
+        val email = requireNotNull(user.email)
+        val credential = EmailAuthProvider.getCredential(email, currentPassword)
+        user.reauthenticate(credential).await()
+        deleteAccountAfterRecentLogin()
+    }
+
+    suspend fun deleteAccountAfterRecentLogin() {
+        val user = requireNotNull(auth.currentUser)
+        val uid = user.uid
+        val ownedPockets = db.collection(POCKETS)
+            .whereEqualTo("createdBy", uid)
+            .get()
+            .await()
+            .documents
+        ownedPockets.forEach { pocket ->
+            deletePocketTree(pocket.id)
+        }
+        db.collection(USERS).document(uid).delete().await()
+        user.delete().await()
     }
 
     fun signOut() {
         auth.signOut()
     }
 
-    fun listenUserPocketId(onPocketId: (String?) -> Unit, onError: (Throwable) -> Unit): ListenerRegistration? {
-        val uid = auth.currentUser?.uid ?: return null
+    fun listenUserDocument(
+        onUserDocument: (UserSession, String?) -> Unit,
+        onError: (Throwable) -> Unit,
+    ): ListenerRegistration? {
+        val user = auth.currentUser ?: return null
+        val uid = user.uid
         return db.collection(USERS)
             .document(uid)
             .addSnapshotListener { snapshot, error ->
@@ -100,7 +211,7 @@ class FirebaseRepository(private val context: Context) {
                     onError(error)
                     return@addSnapshotListener
                 }
-                onPocketId(snapshot?.getString("currentPocketId"))
+                onUserDocument(user.toSession(snapshot), snapshot?.getString("currentPocketId"))
             }
     }
 
@@ -110,7 +221,7 @@ class FirebaseRepository(private val context: Context) {
     ): ListenerRegistration? {
         val uid = auth.currentUser?.uid ?: return null
         return db.collection(POCKETS)
-            .whereArrayContains("memberIds", uid)
+            .whereEqualTo("createdBy", uid)
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     onError(error)
@@ -163,6 +274,31 @@ class FirebaseRepository(private val context: Context) {
             }
     }
 
+    fun listenSavedCellsForMonth(
+        pocketId: String,
+        monthKey: String,
+        onCells: (List<SavingsCell>) -> Unit,
+        onError: (Throwable) -> Unit,
+    ): ListenerRegistration {
+        return db.collection(POCKETS)
+            .document(pocketId)
+            .collection(MONTHS)
+            .document(monthKey)
+            .collection(CELLS)
+            .whereEqualTo("saved", true)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    onError(error)
+                    return@addSnapshotListener
+                }
+                val cells = snapshot?.documents
+                    .orEmpty()
+                    .mapNotNull { it.toSavingsCell() }
+                    .sortedByDescending { it.savedAtMillis ?: 0L }
+                onCells(cells)
+            }
+    }
+
     fun listenYearSummaries(
         pocketId: String,
         year: Int,
@@ -192,27 +328,15 @@ class FirebaseRepository(private val context: Context) {
 
     suspend fun createPocket(pocketName: String): String {
         val user = requireNotNull(auth.currentUser)
-        val inviteCode = uniqueInviteCode()
         val pocketRef = db.collection(POCKETS).document()
         val userRef = db.collection(USERS).document(user.uid)
-        val inviteRef = db.collection(INVITE_CODES).document(inviteCode)
+        val cleanName = pocketName.cleanName().ifBlank { "My Pocket" }
 
         val batch = db.batch()
         batch.set(
             pocketRef,
             mapOf(
-                "name" to pocketName.trim().ifBlank { "Our Pocket" },
-                "inviteCode" to inviteCode,
-                "memberIds" to listOf(user.uid),
-                "createdBy" to user.uid,
-                "createdAt" to FieldValue.serverTimestamp(),
-            ),
-        )
-        batch.set(
-            inviteRef,
-            mapOf(
-                "pocketId" to pocketRef.id,
-                "pocketName" to pocketName.trim().ifBlank { "Our Pocket" },
+                "name" to cleanName,
                 "createdBy" to user.uid,
                 "createdAt" to FieldValue.serverTimestamp(),
             ),
@@ -220,7 +344,7 @@ class FirebaseRepository(private val context: Context) {
         batch.set(
             userRef,
             mapOf(
-                "name" to (user.displayName ?: user.email?.substringBefore("@") ?: "Member"),
+                "name" to (user.displayName ?: user.email?.substringBefore("@") ?: "You"),
                 "email" to user.email.orEmpty(),
                 "currentPocketId" to pocketRef.id,
                 "updatedAt" to FieldValue.serverTimestamp(),
@@ -247,34 +371,42 @@ class FirebaseRepository(private val context: Context) {
         ensureMonthBoard(pocketId, SavingsBoardGenerator.currentMonthKey())
     }
 
-    suspend fun joinPocket(inviteCode: String): String {
-        val user = requireNotNull(auth.currentUser)
-        val normalizedCode = inviteCode.trim().uppercase(Locale.US)
-        val invite = db.collection(INVITE_CODES).document(normalizedCode).get().await()
-        val pocketId = invite.getString("pocketId")
-            ?: throw IllegalArgumentException("Invite code not found.")
+    suspend fun renamePocket(pocketId: String, name: String) {
+        db.collection(POCKETS)
+            .document(pocketId)
+            .update(
+                mapOf(
+                    "name" to name.cleanName(),
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                ),
+            )
+            .await()
+    }
 
-        val batch = db.batch()
-        batch.update(
-            db.collection(POCKETS).document(pocketId),
-            mapOf(
-                "memberIds" to FieldValue.arrayUnion(user.uid),
-                "updatedAt" to FieldValue.serverTimestamp(),
-            ),
-        )
-        batch.set(
-            db.collection(USERS).document(user.uid),
-            mapOf(
-                "name" to (user.displayName ?: user.email?.substringBefore("@") ?: "Member"),
-                "email" to user.email.orEmpty(),
-                "currentPocketId" to pocketId,
-                "updatedAt" to FieldValue.serverTimestamp(),
-            ),
-            SetOptions.merge(),
-        )
-        batch.commit().await()
-        ensureMonthBoard(pocketId, SavingsBoardGenerator.currentMonthKey())
-        return pocketId
+    suspend fun deletePocket(
+        pocketId: String,
+        isCurrentPocket: Boolean,
+        nextPocketId: String?,
+    ) {
+        val user = requireNotNull(auth.currentUser)
+        val userRef = db.collection(USERS).document(user.uid)
+
+        if (isCurrentPocket) {
+            val update = if (nextPocketId == null) {
+                mapOf(
+                    "currentPocketId" to FieldValue.delete(),
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            } else {
+                mapOf(
+                    "currentPocketId" to nextPocketId,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            }
+            userRef.set(update, SetOptions.merge()).await()
+        }
+
+        deletePocketTree(pocketId)
     }
 
     suspend fun ensureMonthBoard(pocketId: String, monthKey: String) {
@@ -367,7 +499,7 @@ class FirebaseRepository(private val context: Context) {
             mapOf(
                 "saved" to true,
                 "savedByUid" to user.uid,
-                "savedByName" to (user.displayName ?: user.email?.substringBefore("@") ?: "Member"),
+                "savedByName" to (user.displayName ?: user.email?.substringBefore("@") ?: "You"),
                 "savedAtMillis" to System.currentTimeMillis(),
                 "savedDayKey" to todayKey,
             )
@@ -434,6 +566,36 @@ class FirebaseRepository(private val context: Context) {
         syncMonthSummary(pocketId, monthKey)
     }
 
+    private suspend fun deletePocketTree(pocketId: String) {
+        val pocketRef = db.collection(POCKETS).document(pocketId)
+        var batch = db.batch()
+        var batchSize = 0
+
+        suspend fun flushBatch() {
+            if (batchSize == 0) return
+            batch.commit().await()
+            batch = db.batch()
+            batchSize = 0
+        }
+
+        suspend fun queueDelete(ref: DocumentReference) {
+            batch.delete(ref)
+            batchSize += 1
+            if (batchSize >= 450) flushBatch()
+        }
+
+        val months = pocketRef.collection(MONTHS).get().await().documents
+        months.forEach { month ->
+            val cells = month.reference.collection(CELLS).get().await().documents
+            cells.forEach { cell ->
+                queueDelete(cell.reference)
+            }
+            queueDelete(month.reference)
+        }
+        queueDelete(pocketRef)
+        flushBatch()
+    }
+
     private suspend fun syncMonthSummary(pocketId: String, monthKey: String) {
         val monthRef = db.collection(POCKETS)
             .document(pocketId)
@@ -459,36 +621,50 @@ class FirebaseRepository(private val context: Context) {
         ).await()
     }
 
+    private fun compressAvatarToDataUri(imageUri: Uri): String {
+        val bitmap = context.contentResolver.openInputStream(imageUri).use { input ->
+            BitmapFactory.decodeStream(input)
+        } ?: throw IllegalArgumentException("Could not read the selected photo.")
+
+        val squareSide = minOf(bitmap.width, bitmap.height)
+        val squareBitmap = Bitmap.createBitmap(
+            bitmap,
+            (bitmap.width - squareSide) / 2,
+            (bitmap.height - squareSide) / 2,
+            squareSide,
+            squareSide,
+        )
+        val avatarBitmap = if (squareSide != AVATAR_MAX_SIDE_PX) {
+            Bitmap.createScaledBitmap(
+                squareBitmap,
+                AVATAR_MAX_SIDE_PX,
+                AVATAR_MAX_SIDE_PX,
+                true,
+            )
+        } else {
+            squareBitmap
+        }
+
+        val bytes = ByteArrayOutputStream().use { output ->
+            avatarBitmap.compress(Bitmap.CompressFormat.JPEG, AVATAR_JPEG_QUALITY, output)
+            output.toByteArray()
+        }
+        if (bytes.size > AVATAR_MAX_BYTES) {
+            throw IllegalArgumentException("Choose a smaller profile photo.")
+        }
+        return "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+    }
+
     private suspend fun upsertUserDocument(user: FirebaseUser, fallbackName: String) {
+        val data = buildMap {
+            put("name", (user.displayName ?: fallbackName).cleanName())
+            put("email", user.email.orEmpty())
+            put("updatedAt", FieldValue.serverTimestamp())
+        }
         db.collection(USERS)
             .document(user.uid)
-            .set(
-                mapOf(
-                    "name" to (user.displayName ?: fallbackName),
-                    "email" to user.email.orEmpty(),
-                    "updatedAt" to FieldValue.serverTimestamp(),
-                ),
-                SetOptions.merge(),
-            )
+            .set(data, SetOptions.merge())
             .await()
-    }
-
-    private suspend fun uniqueInviteCode(): String {
-        repeat(10) {
-            val code = randomInviteCode()
-            val exists = db.collection(INVITE_CODES).document(code).get().await().exists()
-            if (!exists) return code
-        }
-        error("Could not create an invite code. Try again.")
-    }
-
-    private fun randomInviteCode(): String {
-        val alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-        return buildString {
-            repeat(6) {
-                append(alphabet[Random.nextInt(alphabet.length)])
-            }
-        }
     }
 
     private fun googleWebClientId(): String {
@@ -505,12 +681,18 @@ class FirebaseRepository(private val context: Context) {
         return context.getString(id)
     }
 
-    private fun FirebaseUser.toSession(): UserSession {
+    private fun FirebaseUser.toSession(
+        userDoc: DocumentSnapshot? = null,
+        photoData: String? = userDoc?.getString("photoData"),
+    ): UserSession {
         val isGoogleUser = providerData.any { it.providerId == "google.com" }
         return UserSession(
             uid = uid,
-            name = displayName ?: email?.substringBefore("@") ?: "Member",
+            name = userDoc?.getString("name") ?: displayName ?: email?.substringBefore("@") ?: "You",
             email = email.orEmpty(),
+            photoData = photoData,
+            createdAtMillis = metadata?.creationTimestamp,
+            lastLoginAtMillis = metadata?.lastSignInTimestamp,
             isEmailVerified = isEmailVerified || isGoogleUser,
             isGoogleUser = isGoogleUser,
         )
@@ -520,9 +702,7 @@ class FirebaseRepository(private val context: Context) {
         if (!exists()) return null
         return Pocket(
             id = id,
-            name = getString("name") ?: "Our Pocket",
-            inviteCode = getString("inviteCode") ?: "",
-            memberIds = get("memberIds") as? List<String> ?: emptyList(),
+            name = getString("name") ?: "My Pocket",
         )
     }
 
@@ -557,11 +737,17 @@ class FirebaseRepository(private val context: Context) {
             code == FirebaseFirestoreException.Code.PERMISSION_DENIED
     }
 
+    private fun String.cleanName(): String {
+        return trim().replace(Regex("\\s+"), " ")
+    }
+
     companion object {
         private const val USERS = "users"
         private const val POCKETS = "pockets"
         private const val MONTHS = "months"
         private const val CELLS = "cells"
-        private const val INVITE_CODES = "inviteCodes"
+        private const val AVATAR_MAX_SIDE_PX = 256
+        private const val AVATAR_JPEG_QUALITY = 72
+        private const val AVATAR_MAX_BYTES = 350_000
     }
 }
