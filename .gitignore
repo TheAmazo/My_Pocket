@@ -6,6 +6,7 @@
 .gradle/
 build/
 app/build/
+dist/
 
 # Kotlin
 .kotlin/
