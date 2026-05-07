@@ -46,7 +46,31 @@ No spreadsheet chaos • Clean monthly targets • Firebase sync • Daily remin
   <img src="https://img.shields.io/badge/Get%20My%20Pocket-GitHub%20Release-03AED2?style=for-the-badge&logo=github&logoColor=white" alt="Get My Pocket on GitHub" />
 </a>
 
+<br><br>
+
+<a href="https://github.com/TheAmazo/My_Pocket/releases/download/v1.0.0/MyPocket-v1.0.0-debug.apk">
+  <img src="https://img.shields.io/badge/Download%20APK-v1.0.0-F45B26?style=for-the-badge&logo=android&logoColor=white" alt="Download My Pocket v1.0.0 APK" />
+</a>
+
 </div>
+
+### Version 1 APK
+
+The first GitHub release includes a test-installable APK:
+
+```text
+MyPocket-v1.0.0-debug.apk
+```
+
+Download it from [My Pocket v1.0.0](https://github.com/TheAmazo/My_Pocket/releases/tag/v1.0.0).
+
+SHA-256:
+
+```text
+e4e4062dd47f973bc305a819b82ff8b1f3eb98e01ccf45e4935016e497882095
+```
+
+This APK is debug-signed for version 1 testing. A production APK should be signed with a private release keystore that stays outside Git.
 
 ---
 
