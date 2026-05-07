@@ -1,0 +1,179 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function hasField(data, field) {
+      return data.keys().hasAny([field]);
+    }
+
+    function validString(data, field, maxLength) {
+      return !hasField(data, field)
+        || (data[field] is string
+          && data[field].size() > 0
+          && data[field].size() <= maxLength);
+    }
+
+    function optionalString(data, field, maxLength) {
+      return !hasField(data, field)
+        || data[field] == null
+        || (data[field] is string && data[field].size() <= maxLength);
+    }
+
+    function pocketPath(pocketId) {
+      return /databases/$(database)/documents/pockets/$(pocketId);
+    }
+
+    function isPocketOwner(pocketId) {
+      return signedIn()
+        && exists(pocketPath(pocketId))
+        && get(pocketPath(pocketId)).data.createdBy == request.auth.uid;
+    }
+
+    function isPocketOwnerAfter(pocketId) {
+      return signedIn()
+        && existsAfter(pocketPath(pocketId))
+        && getAfter(pocketPath(pocketId)).data.createdBy == request.auth.uid;
+    }
+
+    function isPocketResourceOwner() {
+      return signedIn() && resource.data.createdBy == request.auth.uid;
+    }
+
+    function validCurrentPocket(data) {
+      return !hasField(data, 'currentPocketId')
+        || (data.currentPocketId is string && isPocketOwnerAfter(data.currentPocketId));
+    }
+
+    function validUserData(data, userId) {
+      return data.keys().hasOnly([
+          'name',
+          'email',
+          'currentPocketId',
+          'photoData',
+          'photoUrl',
+          'updatedAt'
+        ])
+        && request.auth.uid == userId
+        && validString(data, 'name', 80)
+        && (!hasField(data, 'email')
+          || (data.email is string && data.email == request.auth.token.email))
+        && validCurrentPocket(data)
+        && (!hasField(data, 'photoData')
+          || (data.photoData is string && data.photoData.size() <= 800000))
+        && optionalString(data, 'photoUrl', 2000);
+    }
+
+    function validPocketData(data) {
+      return data.keys().hasOnly([
+          'name',
+          'createdBy',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.createdBy == request.auth.uid
+        && validString(data, 'name', 40);
+    }
+
+    function validMonthData(data, monthId) {
+      return data.keys().hasOnly([
+          'monthKey',
+          'year',
+          'cellCount',
+          'targetTotal',
+          'savedCount',
+          'savedTotal',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.monthKey == monthId
+        && data.year is int
+        && data.cellCount is int
+        && data.cellCount >= 0
+        && data.cellCount <= 720
+        && data.targetTotal is int
+        && data.targetTotal >= 0
+        && data.targetTotal <= 720000
+        && (!hasField(data, 'savedCount')
+          || (data.savedCount is int && data.savedCount >= 0 && data.savedCount <= data.cellCount))
+        && (!hasField(data, 'savedTotal')
+          || (data.savedTotal is int && data.savedTotal >= 0 && data.savedTotal <= data.targetTotal));
+    }
+
+    function validCellData(data) {
+      return data.keys().hasOnly([
+          'index',
+          'amount',
+          'saved',
+          'savedByUid',
+          'savedByName',
+          'savedAtMillis',
+          'savedDayKey',
+          'round'
+        ])
+        && data.index is int
+        && data.index >= 0
+        && data.index <= 719
+        && data.amount in [20, 50, 100, 500, 1000]
+        && data.saved is bool
+        && (!hasField(data, 'round')
+          || (data.round is int && data.round >= 0 && data.round <= 23))
+        && optionalString(data, 'savedByName', 80)
+        && optionalString(data, 'savedDayKey', 10)
+        && (data.saved == false
+          || data.savedByUid == request.auth.uid
+          || data.savedByUid == null)
+        && (data.saved == true
+          || (data.savedByUid == null && data.savedByName == null && data.savedAtMillis == null && data.savedDayKey == null));
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow create: if signedIn() && validUserData(request.resource.data, userId);
+      allow update: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name',
+          'email',
+          'currentPocketId',
+          'photoData',
+          'photoUrl',
+          'updatedAt'
+        ])
+        && validUserData(request.resource.data, userId);
+      allow delete: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /pockets/{pocketId} {
+      allow read: if isPocketResourceOwner();
+      allow create: if signedIn()
+        && validPocketData(request.resource.data)
+        && request.resource.data.keys().hasAll(['name', 'createdBy', 'createdAt']);
+      allow update: if isPocketOwner(pocketId)
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name',
+          'updatedAt'
+        ])
+        && validPocketData(request.resource.data);
+      allow delete: if isPocketOwner(pocketId);
+
+      match /months/{monthId} {
+        allow read: if isPocketOwner(pocketId);
+        allow create, update: if isPocketOwner(pocketId)
+          && validMonthData(request.resource.data, monthId);
+        allow delete: if isPocketOwner(pocketId);
+
+        match /cells/{cellId} {
+          allow read: if isPocketOwner(pocketId);
+          allow create, update: if isPocketOwner(pocketId)
+            && validCellData(request.resource.data);
+          allow delete: if isPocketOwner(pocketId);
+        }
+      }
+    }
+  }
+}
