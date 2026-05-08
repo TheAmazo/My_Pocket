@@ -8,6 +8,7 @@ import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -60,6 +61,8 @@ import androidx.compose.material.icons.rounded.PersonAdd
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -73,14 +76,18 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -90,6 +97,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -99,14 +107,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -118,6 +129,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.thisara.mypocket.R
 import com.thisara.mypocket.data.AppSettings
+import com.thisara.mypocket.data.AvatarCropper
 import com.thisara.mypocket.data.MonthBoard
 import com.thisara.mypocket.data.MonthSummary
 import com.thisara.mypocket.data.Pocket
@@ -126,10 +138,10 @@ import com.thisara.mypocket.data.canToggle
 import com.thisara.mypocket.data.isLocked
 import com.thisara.mypocket.data.sortRank
 import com.thisara.mypocket.ui.theme.PocketBlue
-import com.thisara.mypocket.ui.theme.PocketInk
-import com.thisara.mypocket.ui.theme.PocketMist
+import com.thisara.mypocket.ui.theme.PocketElectric
 import com.thisara.mypocket.ui.theme.PocketOrange
 import com.thisara.mypocket.ui.theme.PocketRose
+import com.thisara.mypocket.ui.theme.PocketTheme
 import com.thisara.mypocket.ui.theme.PocketYellow
 import java.time.Month
 import java.time.YearMonth
@@ -137,12 +149,17 @@ import java.time.format.TextStyle
 import java.util.Date
 import java.util.Locale
 
+private val GlassCardShape = RoundedCornerShape(24.dp)
+private val GlassCompactShape = RoundedCornerShape(20.dp)
+private val GlassPillShape = RoundedCornerShape(100.dp)
+
 @Composable
 fun MyPocketApp(viewModel: MainViewModel) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
     val snackbarHostState = remember { SnackbarHostState() }
+    var pendingAvatarUri by remember { mutableStateOf<Uri?>(null) }
     val googleLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
@@ -156,7 +173,7 @@ fun MyPocketApp(viewModel: MainViewModel) {
     val profilePhotoLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
     ) { uri: Uri? ->
-        uri?.let(viewModel::updateProfilePhoto)
+        pendingAvatarUri = uri
     }
 
     LaunchedEffect(state.message) {
@@ -186,83 +203,112 @@ fun MyPocketApp(viewModel: MainViewModel) {
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = Color.Transparent,
     ) { padding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .background(appBackgroundBrush())
                 .padding(padding)
                 .safeDrawingPadding(),
         ) {
-            when {
-                !state.isSignedIn -> AuthGate(
-                    state = state,
-                    onMode = viewModel::setAuthMode,
-                    onSignIn = viewModel::signIn,
-                    onSignUp = viewModel::signUp,
-                    onGoogle = {
-                        viewModel.googleSignInIntent()?.let(googleLauncher::launch)
-                    },
-                )
+            CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
+                when {
+                    !state.isSignedIn -> AuthGate(
+                        state = state,
+                        onMode = viewModel::setAuthMode,
+                        onSignIn = viewModel::signIn,
+                        onSignUp = viewModel::signUp,
+                        onGoogle = {
+                            viewModel.googleSignInIntent()?.let(googleLauncher::launch)
+                        },
+                    )
 
-                state.needsEmailVerification -> EmailVerificationScreen(
-                    email = state.user?.email.orEmpty(),
-                    onSendAgain = viewModel::sendVerificationEmail,
-                    onRefresh = viewModel::refreshVerification,
-                    onSignOut = viewModel::signOut,
-                )
+                    state.needsEmailVerification -> EmailVerificationScreen(
+                        email = state.user?.email.orEmpty(),
+                        onSendAgain = viewModel::sendVerificationEmail,
+                        onRefresh = viewModel::refreshVerification,
+                        onSignOut = viewModel::signOut,
+                    )
 
-                state.needsPocket || state.showPocketPicker -> PocketSelectorScreen(
-                    pockets = state.pockets,
-                    currentPocketId = state.pocket?.id,
-                    onSelect = viewModel::switchPocket,
-                    onCreate = viewModel::createPocket,
-                    onRename = viewModel::renamePocket,
-                    onDelete = viewModel::deletePocket,
-                    onSignOut = viewModel::signOut,
-                )
+                    state.needsPocket || state.showPocketPicker -> PocketSelectorScreen(
+                        pockets = state.pockets,
+                        currentPocketId = state.pocket?.id,
+                        onSelect = viewModel::switchPocket,
+                        onCreate = viewModel::createPocket,
+                        onRename = viewModel::renamePocket,
+                        onDelete = viewModel::deletePocket,
+                        onSignOut = viewModel::signOut,
+                    )
 
-                else -> HomeScreen(
-                    state = state,
-                    settings = settings,
-                    onTab = viewModel::setTab,
-                    onShowPockets = viewModel::showPocketPicker,
-                    onToggleCell = viewModel::toggleCell,
-                    onRepairBoard = viewModel::repairCurrentBoard,
-                    onReminderEnabled = viewModel::setRemindersEnabled,
-                    onReminderHour = viewModel::setReminderHour,
-                    onSignOut = viewModel::signOut,
-                    onPreviousSummaryYear = viewModel::previousSummaryYear,
-                    onNextSummaryYear = viewModel::nextSummaryYear,
-                    onOpenSummaryMonth = viewModel::openSummaryMonth,
-                    onCloseSummaryMonth = viewModel::closeSummaryMonth,
-                    onPickProfilePhoto = {
-                        profilePhotoLauncher.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
-                        )
-                    },
-                    onDeleteProfilePhoto = viewModel::deleteProfilePhoto,
-                    onUpdateDisplayName = viewModel::updateDisplayName,
-                    onChangePassword = viewModel::changePassword,
-                    onDeleteAccountWithPassword = viewModel::deleteAccountWithPassword,
-                    onDeleteGoogleAccount = {
-                        viewModel.googleAccountDeleteIntent()?.let(googleAccountDeleteLauncher::launch)
-                    },
-                )
+                    else -> HomeScreen(
+                        state = state,
+                        settings = settings,
+                        onTab = viewModel::setTab,
+                        onShowPockets = viewModel::showPocketPicker,
+                        onToggleCell = viewModel::toggleCell,
+                        onRepairBoard = viewModel::repairCurrentBoard,
+                        onReminderEnabled = viewModel::setRemindersEnabled,
+                        onReminderHour = viewModel::setReminderHour,
+                        onDarkModeEnabled = viewModel::setDarkModeEnabled,
+                        onSignOut = viewModel::signOut,
+                        onPreviousSummaryYear = viewModel::previousSummaryYear,
+                        onNextSummaryYear = viewModel::nextSummaryYear,
+                        onOpenSummaryMonth = viewModel::openSummaryMonth,
+                        onCloseSummaryMonth = viewModel::closeSummaryMonth,
+                        onPickProfilePhoto = {
+                            profilePhotoLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                            )
+                        },
+                        onDeleteProfilePhoto = viewModel::deleteProfilePhoto,
+                        onUpdateDisplayName = viewModel::updateDisplayName,
+                        onChangePassword = viewModel::changePassword,
+                        onDeleteAccountWithPassword = viewModel::deleteAccountWithPassword,
+                        onDeleteGoogleAccount = {
+                            viewModel.googleAccountDeleteIntent()?.let(googleAccountDeleteLauncher::launch)
+                        },
+                    )
+                }
             }
 
             if (state.loading) {
+                val style = PocketTheme.colors
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.White.copy(alpha = 0.62f)),
+                        .background(style.loadingOverlay),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator(color = PocketRose)
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                 }
+            }
+
+            pendingAvatarUri?.let { uri ->
+                AvatarCropDialog(
+                    sourceUri = uri,
+                    onDismiss = { pendingAvatarUri = null },
+                    onSave = { zoom, offsetX, offsetY ->
+                        pendingAvatarUri = null
+                        viewModel.updateProfilePhoto(
+                            uri = uri,
+                            zoom = zoom,
+                            offsetX = offsetX,
+                            offsetY = offsetY,
+                        )
+                    },
+                )
             }
         }
     }
+}
+
+@Composable
+private fun appBackgroundBrush(): Brush {
+    val style = PocketTheme.colors
+    return Brush.verticalGradient(
+        colors = style.backgroundGradient,
+    )
 }
 
 @Composable
@@ -310,7 +356,7 @@ private fun LandingScreen(onSignUp: () -> Unit, onSignIn: () -> Unit) {
                 text = "My Pocket",
                 style = MaterialTheme.typography.displayMedium,
                 fontWeight = FontWeight.Black,
-                color = PocketInk,
+                color = MaterialTheme.colorScheme.onBackground,
             )
             Text(
                 text = "A personal monthly board for saving money without messy marks or wrong totals.",
@@ -352,11 +398,16 @@ private fun LandingScreen(onSignUp: () -> Unit, onSignIn: () -> Unit) {
 
 @Composable
 private fun AppIconMark(size: Dp) {
+    val style = PocketTheme.colors
     Box(
         modifier = Modifier
             .size(size)
             .clip(CircleShape)
-            .background(PocketBlue),
+            .background(
+                Brush.linearGradient(
+                    style.appIconGradient,
+                ),
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Image(
@@ -449,6 +500,7 @@ private fun AuthPanel(
             text = title,
             style = MaterialTheme.typography.headlineLarge,
             fontWeight = FontWeight.Black,
+            color = MaterialTheme.colorScheme.onBackground,
         )
         Column(verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
     }
@@ -469,11 +521,21 @@ private fun EmailField(value: String, onValueChange: (String) -> Unit) {
 
 @Composable
 private fun PasswordField(label: String, value: String, onValueChange: (String) -> Unit) {
+    var passwordVisible by remember { mutableStateOf(false) }
+
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         label = { Text(label) },
-        visualTransformation = PasswordVisualTransformation(),
+        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+        trailingIcon = {
+            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                Icon(
+                    imageVector = if (passwordVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                    contentDescription = if (passwordVisible) "Hide password" else "Show password",
+                )
+            }
+        },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
@@ -541,6 +603,7 @@ private fun PocketSelectorScreen(
     onDelete: (String) -> Unit,
     onSignOut: () -> Unit,
 ) {
+    val style = PocketTheme.colors
     var pocketName by remember { mutableStateOf("My Pocket") }
     var renameTarget by remember { mutableStateOf<Pocket?>(null) }
     var renameName by remember { mutableStateOf("") }
@@ -557,21 +620,27 @@ private fun PocketSelectorScreen(
                     text = "Your pockets",
                     style = MaterialTheme.typography.headlineLarge,
                     fontWeight = FontWeight.Black,
+                    color = MaterialTheme.colorScheme.onBackground,
                 )
             }
             if (pockets.isNotEmpty()) {
                 items(pockets, key = { it.id }) { pocket ->
                     Surface(
-                        color = if (pocket.id == currentPocketId) PocketMist else Color.White,
-                        shape = RoundedCornerShape(8.dp),
-                        tonalElevation = 1.dp,
-                        shadowElevation = 1.dp,
+                        color = if (pocket.id == currentPocketId) style.glassSelected else style.glassStrong,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        shape = GlassCardShape,
+                        border = BorderStroke(
+                            1.dp,
+                            if (pocket.id == currentPocketId) style.glassStrokeStrong else style.glassStroke,
+                        ),
+                        tonalElevation = 0.dp,
+                        shadowElevation = 14.dp,
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { onSelect(pocket.id) },
                     ) {
                         Row(
-                            modifier = Modifier.padding(16.dp),
+                            modifier = Modifier.padding(18.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -730,6 +799,7 @@ private fun HomeScreen(
     onRepairBoard: () -> Unit,
     onReminderEnabled: (Boolean) -> Unit,
     onReminderHour: (Int) -> Unit,
+    onDarkModeEnabled: (Boolean) -> Unit,
     onSignOut: () -> Unit,
     onPreviousSummaryYear: () -> Unit,
     onNextSummaryYear: () -> Unit,
@@ -757,6 +827,7 @@ private fun HomeScreen(
                     onRepairBoard = onRepairBoard,
                     onReminderEnabled = onReminderEnabled,
                     onReminderHour = onReminderHour,
+                    onDarkModeEnabled = onDarkModeEnabled,
                     onSignOut = onSignOut,
                     onPreviousSummaryYear = onPreviousSummaryYear,
                     onNextSummaryYear = onNextSummaryYear,
@@ -782,6 +853,7 @@ private fun HomeScreen(
                 onRepairBoard = onRepairBoard,
                 onReminderEnabled = onReminderEnabled,
                 onReminderHour = onReminderHour,
+                onDarkModeEnabled = onDarkModeEnabled,
                 onSignOut = onSignOut,
                 onPreviousSummaryYear = onPreviousSummaryYear,
                 onNextSummaryYear = onNextSummaryYear,
@@ -811,6 +883,7 @@ private fun HomeScaffold(
     onRepairBoard: () -> Unit,
     onReminderEnabled: (Boolean) -> Unit,
     onReminderHour: (Int) -> Unit,
+    onDarkModeEnabled: (Boolean) -> Unit,
     onSignOut: () -> Unit,
     onPreviousSummaryYear: () -> Unit,
     onNextSummaryYear: () -> Unit,
@@ -838,7 +911,7 @@ private fun HomeScaffold(
                 HomeNavigationBar(selectedTab = state.selectedTab, onTab = onTab)
             }
         },
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = Color.Transparent,
         modifier = modifier,
     ) { padding ->
         Box(
@@ -853,6 +926,7 @@ private fun HomeScaffold(
                 onRepairBoard = onRepairBoard,
                 onReminderEnabled = onReminderEnabled,
                 onReminderHour = onReminderHour,
+                onDarkModeEnabled = onDarkModeEnabled,
                 onSignOut = onSignOut,
                 onPreviousSummaryYear = onPreviousSummaryYear,
                 onNextSummaryYear = onNextSummaryYear,
@@ -888,19 +962,34 @@ private fun HomeTopBar(pocketName: String, onShowPockets: () -> Unit) {
                 )
             }
         },
-        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = Color.Transparent,
+            titleContentColor = MaterialTheme.colorScheme.onBackground,
+            navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
+        ),
     )
 }
 
 @Composable
 private fun HomeNavigationBar(selectedTab: HomeTab, onTab: (HomeTab) -> Unit) {
-    NavigationBar {
+    val style = PocketTheme.colors
+    NavigationBar(
+        containerColor = style.navigationGlass,
+        tonalElevation = 0.dp,
+    ) {
         HomeTab.entries.forEach { tab ->
             NavigationBarItem(
                 selected = selectedTab == tab,
                 onClick = { onTab(tab) },
                 icon = { Icon(tab.icon(), contentDescription = null) },
                 label = { Text(tab.label()) },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.onSurface,
+                    selectedTextColor = PocketRose,
+                    indicatorColor = PocketElectric.copy(alpha = 0.34f),
+                    unselectedIconColor = style.textMuted,
+                    unselectedTextColor = style.textMuted,
+                ),
             )
         }
     }
@@ -908,7 +997,8 @@ private fun HomeNavigationBar(selectedTab: HomeTab, onTab: (HomeTab) -> Unit) {
 
 @Composable
 private fun HomeNavigationRail(selectedTab: HomeTab, onTab: (HomeTab) -> Unit) {
-    NavigationRail(containerColor = MaterialTheme.colorScheme.background) {
+    val style = PocketTheme.colors
+    NavigationRail(containerColor = style.navigationGlass) {
         Spacer(Modifier.height(12.dp))
         HomeTab.entries.forEach { tab ->
             NavigationRailItem(
@@ -916,6 +1006,13 @@ private fun HomeNavigationRail(selectedTab: HomeTab, onTab: (HomeTab) -> Unit) {
                 onClick = { onTab(tab) },
                 icon = { Icon(tab.icon(), contentDescription = null) },
                 label = { Text(tab.label()) },
+                colors = NavigationRailItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.onSurface,
+                    selectedTextColor = PocketRose,
+                    indicatorColor = PocketElectric.copy(alpha = 0.34f),
+                    unselectedIconColor = style.textMuted,
+                    unselectedTextColor = style.textMuted,
+                ),
             )
         }
     }
@@ -929,6 +1026,7 @@ private fun HomeTabContent(
     onRepairBoard: () -> Unit,
     onReminderEnabled: (Boolean) -> Unit,
     onReminderHour: (Int) -> Unit,
+    onDarkModeEnabled: (Boolean) -> Unit,
     onSignOut: () -> Unit,
     onPreviousSummaryYear: () -> Unit,
     onNextSummaryYear: () -> Unit,
@@ -960,6 +1058,7 @@ private fun HomeTabContent(
             settings = settings,
             onReminderEnabled = onReminderEnabled,
             onReminderHour = onReminderHour,
+            onDarkModeEnabled = onDarkModeEnabled,
             onSignOut = onSignOut,
         )
         HomeTab.Profile -> ProfileScreen(
@@ -1117,13 +1216,18 @@ private fun BoardScreen(
 
 @Composable
 private fun TodayBanner(todayKey: String) {
+    val style = PocketTheme.colors
     Surface(
-        color = PocketMist,
-        shape = RoundedCornerShape(8.dp),
+        color = style.glassStrong,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = GlassCardShape,
+        border = BorderStroke(1.dp, style.glassStroke),
+        tonalElevation = 0.dp,
+        shadowElevation = 12.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
-            modifier = Modifier.padding(14.dp),
+            modifier = Modifier.padding(18.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1138,6 +1242,7 @@ private fun TodayBanner(todayKey: String) {
 
 @Composable
 private fun BoardSummary(board: MonthBoard) {
+    val style = PocketTheme.colors
     val progress = if (board.targetTotal == 0) 0f else board.savedTotal.toFloat() / board.targetTotal
 
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -1153,9 +1258,9 @@ private fun BoardSummary(board: MonthBoard) {
             modifier = Modifier
                 .fillMaxWidth()
                 .height(10.dp)
-                .clip(RoundedCornerShape(8.dp)),
+                .clip(GlassPillShape),
             color = PocketBlue,
-            trackColor = PocketMist,
+            trackColor = style.progressTrack,
         )
         Text(
             text = "${board.monthKey} target: Rs. ${board.targetTotal}",
@@ -1202,14 +1307,17 @@ private fun SummaryMetricRow(metrics: List<SummaryMetric>, modifier: Modifier = 
 
 @Composable
 private fun SummaryTile(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
+    val style = PocketTheme.colors
     Surface(
-        color = Color.White,
-        shape = RoundedCornerShape(8.dp),
-        tonalElevation = 1.dp,
-        shadowElevation = 1.dp,
+        color = style.glassStrong,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = GlassCompactShape,
+        border = BorderStroke(1.dp, style.glassStroke),
+        tonalElevation = 0.dp,
+        shadowElevation = 12.dp,
         modifier = modifier,
     ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             StatusDot(color)
             Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black)
@@ -1219,37 +1327,43 @@ private fun SummaryTile(label: String, value: String, color: Color, modifier: Mo
 
 @Composable
 private fun SavingsCellTile(cell: SavingsCell, todayKey: String, onClick: () -> Unit) {
+    val style = PocketTheme.colors
     val locked = cell.isLocked(todayKey)
     val canClick = cell.canToggle(todayKey)
     val background = when {
-        locked -> Color(0xFFE4E7EA)
-        cell.saved -> PocketBlue
-        else -> Color.White
+        locked -> style.lockedCell
+        cell.saved -> style.savedCell
+        else -> style.openCell
     }
     val content = when {
-        locked -> Color(0xFF6B7378)
-        cell.saved -> Color.White
-        else -> PocketInk
+        locked -> style.lockedCellContent
+        cell.saved -> style.savedCellContent
+        else -> style.openCellContent
     }
     val borderColor = when (cell.amount) {
         20 -> PocketBlue
         50 -> PocketYellow
         100 -> PocketOrange
         500 -> PocketRose
-        else -> PocketInk
+        else -> MaterialTheme.colorScheme.outline
     }
 
     Surface(
         color = background,
-        shape = RoundedCornerShape(8.dp),
-        tonalElevation = if (cell.saved) 3.dp else 1.dp,
-        shadowElevation = 1.dp,
+        contentColor = content,
+        shape = GlassCompactShape,
+        border = BorderStroke(
+            1.dp,
+            if (cell.saved) style.glassStrokeStrong else style.glassStroke.copy(alpha = if (locked) 0.42f else 0.9f),
+        ),
+        tonalElevation = 0.dp,
+        shadowElevation = if (cell.saved) 14.dp else 10.dp,
         modifier = Modifier
             .aspectRatio(1.05f)
             .clickable(enabled = canClick, onClick = onClick),
     ) {
         Column(
-            modifier = Modifier.padding(10.dp),
+            modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
             Box(
@@ -1352,7 +1466,12 @@ private fun SummaryYearOverview(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Summary", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+                    Text(
+                        "Summary",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Black,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = onPreviousYear) {
                             Icon(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, contentDescription = "Previous year")
@@ -1399,6 +1518,7 @@ private fun MonthCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val style = PocketTheme.colors
     val saved = summary?.savedTotal ?: 0
     val missed = summary?.missedTotal ?: 0
     val savedCount = summary?.savedCount ?: 0
@@ -1406,15 +1526,17 @@ private fun MonthCard(
     val progress = if (cellCount == 0) 0f else savedCount.toFloat() / cellCount.toFloat()
 
     Surface(
-        color = Color.White,
-        shape = RoundedCornerShape(8.dp),
-        tonalElevation = 1.dp,
-        shadowElevation = 1.dp,
+        color = style.glassStrong,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = GlassCardShape,
+        border = BorderStroke(1.dp, style.glassStroke),
+        tonalElevation = 0.dp,
+        shadowElevation = 14.dp,
         modifier = modifier.clickable(onClick = onClick),
     ) {
         Column(
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(16.dp),
         ) {
             Row(
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1432,9 +1554,9 @@ private fun MonthCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(8.dp)
-                    .clip(RoundedCornerShape(8.dp)),
+                    .clip(GlassPillShape),
                 color = PocketBlue,
-                trackColor = PocketMist,
+                trackColor = style.progressTrack,
             )
         }
     }
@@ -1477,7 +1599,12 @@ private fun MonthDetailScreen(
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
                     }
                     Column {
-                        Text(monthKey.monthName(), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+                        Text(
+                            monthKey.monthName(),
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Black,
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
                         Text(monthKey, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -1514,16 +1641,19 @@ private fun MonthDetailScreen(
 
 @Composable
 private fun MonthDayCard(dayKey: String, cells: List<SavingsCell>) {
+    val style = PocketTheme.colors
     val savedTotal = cells.sumOf { it.amount }
     Surface(
-        color = if (cells.isEmpty()) Color.White else PocketMist,
-        shape = RoundedCornerShape(8.dp),
-        tonalElevation = 1.dp,
-        shadowElevation = 1.dp,
+        color = if (cells.isEmpty()) style.glass else style.glassStrong,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = GlassCardShape,
+        border = BorderStroke(1.dp, if (cells.isEmpty()) style.glassStroke.copy(alpha = 0.72f) else style.glassStroke),
+        tonalElevation = 0.dp,
+        shadowElevation = 12.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
-            modifier = Modifier.padding(14.dp),
+            modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(
@@ -1604,7 +1734,12 @@ private fun ProfileScreen(
             modifier = Modifier.fillMaxSize(),
         ) {
             item {
-                Text("Profile", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+                Text(
+                    "Profile",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Black,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
             }
             item {
                 SectionSurface {
@@ -1721,10 +1856,15 @@ private fun ProfileScreen(
 
 @Composable
 private fun AvatarImage(photoData: String?, size: Dp) {
+    val style = PocketTheme.colors
     val avatarBitmap = remember(photoData) { photoData?.decodeAvatarBitmap() }
     Surface(
-        color = PocketMist,
+        color = style.glassStrong,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         shape = CircleShape,
+        border = BorderStroke(1.dp, style.glassStroke),
+        tonalElevation = 0.dp,
+        shadowElevation = 12.dp,
         modifier = Modifier.size(size),
     ) {
         if (avatarBitmap != null) {
@@ -1744,6 +1884,110 @@ private fun AvatarImage(photoData: String?, size: Dp) {
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun AvatarCropDialog(
+    sourceUri: Uri,
+    onDismiss: () -> Unit,
+    onSave: (Float, Float, Float) -> Unit,
+) {
+    val context = LocalContext.current
+    val style = PocketTheme.colors
+    val sourceBitmap = remember(sourceUri) {
+        runCatching { AvatarCropper.loadBitmap(context, sourceUri) }.getOrNull()
+    }
+    var zoom by remember(sourceUri) { mutableStateOf(1f) }
+    var offsetX by remember(sourceUri) { mutableStateOf(0f) }
+    var offsetY by remember(sourceUri) { mutableStateOf(0f) }
+    val previewBitmap = remember(sourceBitmap, zoom, offsetX, offsetY) {
+        sourceBitmap?.let {
+            AvatarCropper.cropToAvatarBitmap(
+                source = it,
+                zoom = zoom,
+                offsetX = offsetX,
+                offsetY = offsetY,
+            ).asImageBitmap()
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Crop avatar") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            ) {
+                if (previewBitmap == null) {
+                    EmptyState("Could not load the selected photo.")
+                } else {
+                    Surface(
+                        color = style.glassStrong,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        shape = CircleShape,
+                        border = BorderStroke(1.dp, style.glassStrokeStrong),
+                        shadowElevation = 16.dp,
+                        modifier = Modifier
+                            .size(220.dp)
+                            .align(Alignment.CenterHorizontally),
+                    ) {
+                        Image(
+                            bitmap = previewBitmap,
+                            contentDescription = "Avatar crop preview",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    CropSlider(
+                        label = "Zoom",
+                        value = zoom,
+                        valueRange = 1f..3f,
+                        onValueChange = { zoom = it },
+                    )
+                    CropSlider(
+                        label = "Horizontal",
+                        value = offsetX,
+                        valueRange = -1f..1f,
+                        onValueChange = { offsetX = it },
+                    )
+                    CropSlider(
+                        label = "Vertical",
+                        value = offsetY,
+                        valueRange = -1f..1f,
+                        onValueChange = { offsetY = it },
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(enabled = previewBitmap != null, onClick = { onSave(zoom, offsetX, offsetY) }) {
+                Text("Save photo")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
+}
+
+@Composable
+private fun CropSlider(
+    label: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+        )
     }
 }
 
@@ -1898,6 +2142,7 @@ private fun SettingsScreen(
     settings: AppSettings,
     onReminderEnabled: (Boolean) -> Unit,
     onReminderHour: (Int) -> Unit,
+    onDarkModeEnabled: (Boolean) -> Unit,
     onSignOut: () -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -1909,7 +2154,12 @@ private fun SettingsScreen(
             modifier = Modifier.fillMaxSize(),
         ) {
             item {
-                Text("Settings", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+                Text(
+                    "Settings",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Black,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
             }
             item {
                 SectionSurface {
@@ -1920,6 +2170,29 @@ private fun SettingsScreen(
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Black,
                             letterSpacing = 0.sp,
+                        )
+                    }
+                }
+            }
+            item {
+                SectionSurface {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Rounded.Settings, contentDescription = null)
+                                Spacer(Modifier.size(8.dp))
+                                Text("Dark mode", fontWeight = FontWeight.Bold)
+                            }
+                            Switch(checked = settings.darkModeEnabled, onCheckedChange = onDarkModeEnabled)
+                        }
+                        Text(
+                            if (settings.darkModeEnabled) "Deep glass mode is active." else "Light card mode is active.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
                         )
                     }
                 }
@@ -1972,14 +2245,18 @@ private fun SettingsScreen(
 
 @Composable
 private fun SectionSurface(content: @Composable () -> Unit) {
+    val style = PocketTheme.colors
+
     Surface(
-        color = Color.White,
-        shape = RoundedCornerShape(8.dp),
-        tonalElevation = 1.dp,
-        shadowElevation = 1.dp,
+        color = style.glassStrong,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = GlassCardShape,
+        border = BorderStroke(1.dp, style.glassStroke),
+        tonalElevation = 0.dp,
+        shadowElevation = 16.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Box(Modifier.padding(16.dp)) {
+        Box(Modifier.padding(20.dp)) {
             content()
         }
     }
@@ -1987,9 +2264,15 @@ private fun SectionSurface(content: @Composable () -> Unit) {
 
 @Composable
 private fun EmptyState(text: String) {
+    val style = PocketTheme.colors
+
     Surface(
-        color = PocketMist,
-        shape = RoundedCornerShape(8.dp),
+        color = style.glass,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = GlassCardShape,
+        border = BorderStroke(1.dp, style.glassStroke.copy(alpha = 0.72f)),
+        tonalElevation = 0.dp,
+        shadowElevation = 10.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(

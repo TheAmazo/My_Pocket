@@ -2,10 +2,7 @@ package com.thisara.mypocket.data
 
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
-import android.util.Base64
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.firebase.auth.EmailAuthProvider
@@ -21,7 +18,6 @@ import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.tasks.await
-import java.io.ByteArrayOutputStream
 import java.time.YearMonth
 import java.util.Locale
 
@@ -114,9 +110,20 @@ class FirebaseRepository(private val context: Context) {
         return user.toSession()
     }
 
-    suspend fun updateProfilePhoto(imageUri: Uri): UserSession {
+    suspend fun updateProfilePhoto(
+        imageUri: Uri,
+        zoom: Float = 1f,
+        offsetX: Float = 0f,
+        offsetY: Float = 0f,
+    ): UserSession {
         val user = requireNotNull(auth.currentUser)
-        val photoData = compressAvatarToDataUri(imageUri)
+        val photoData = AvatarCropper.cropUriToDataUri(
+            context = context,
+            imageUri = imageUri,
+            zoom = zoom,
+            offsetX = offsetX,
+            offsetY = offsetY,
+        )
         user.updateProfile(
             UserProfileChangeRequest.Builder()
                 .setPhotoUri(null)
@@ -621,40 +628,6 @@ class FirebaseRepository(private val context: Context) {
         ).await()
     }
 
-    private fun compressAvatarToDataUri(imageUri: Uri): String {
-        val bitmap = context.contentResolver.openInputStream(imageUri).use { input ->
-            BitmapFactory.decodeStream(input)
-        } ?: throw IllegalArgumentException("Could not read the selected photo.")
-
-        val squareSide = minOf(bitmap.width, bitmap.height)
-        val squareBitmap = Bitmap.createBitmap(
-            bitmap,
-            (bitmap.width - squareSide) / 2,
-            (bitmap.height - squareSide) / 2,
-            squareSide,
-            squareSide,
-        )
-        val avatarBitmap = if (squareSide != AVATAR_MAX_SIDE_PX) {
-            Bitmap.createScaledBitmap(
-                squareBitmap,
-                AVATAR_MAX_SIDE_PX,
-                AVATAR_MAX_SIDE_PX,
-                true,
-            )
-        } else {
-            squareBitmap
-        }
-
-        val bytes = ByteArrayOutputStream().use { output ->
-            avatarBitmap.compress(Bitmap.CompressFormat.JPEG, AVATAR_JPEG_QUALITY, output)
-            output.toByteArray()
-        }
-        if (bytes.size > AVATAR_MAX_BYTES) {
-            throw IllegalArgumentException("Choose a smaller profile photo.")
-        }
-        return "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
-    }
-
     private suspend fun upsertUserDocument(user: FirebaseUser, fallbackName: String) {
         val data = buildMap {
             put("name", (user.displayName ?: fallbackName).cleanName())
@@ -746,8 +719,5 @@ class FirebaseRepository(private val context: Context) {
         private const val POCKETS = "pockets"
         private const val MONTHS = "months"
         private const val CELLS = "cells"
-        private const val AVATAR_MAX_SIDE_PX = 256
-        private const val AVATAR_JPEG_QUALITY = 72
-        private const val AVATAR_MAX_BYTES = 350_000
     }
 }

@@ -407,9 +407,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updateProfilePhoto(uri: Uri) {
+    fun updateProfilePhoto(
+        uri: Uri,
+        zoom: Float = 1f,
+        offsetX: Float = 0f,
+        offsetY: Float = 0f,
+    ) {
         runLoading {
-            val session = repository.updateProfilePhoto(uri)
+            val session = repository.updateProfilePhoto(
+                imageUri = uri,
+                zoom = zoom,
+                offsetX = offsetX,
+                offsetY = offsetY,
+            )
             mutableState.update { it.copy(user = session, message = "Profile photo updated.") }
         }
     }
@@ -478,6 +488,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setReminderHour(hour: Int) {
         viewModelScope.launch {
             settingsStore.setReminderHour(hour)
+        }
+    }
+
+    fun setDarkModeEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStore.setDarkModeEnabled(enabled)
         }
     }
 
