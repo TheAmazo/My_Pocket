@@ -48,29 +48,29 @@ No spreadsheet chaos • Clean monthly targets • Firebase sync • Daily remin
 
 <br><br>
 
-<a href="https://github.com/TheAmazo/My_Pocket/releases/download/v1.0.0/MyPocket-v1.0.0-debug.apk">
-  <img src="https://img.shields.io/badge/Download%20APK-v1.0.0-F45B26?style=for-the-badge&logo=android&logoColor=white" alt="Download My Pocket v1.0.0 APK" />
+<a href="https://github.com/TheAmazo/My_Pocket/releases/download/v2.0.0/MyPocket-v2.0.0-debug.apk">
+  <img src="https://img.shields.io/badge/Download%20APK-v2.0.0-F45B26?style=for-the-badge&logo=android&logoColor=white" alt="Download My Pocket v2.0.0 APK" />
 </a>
 
 </div>
 
-### Version 1 APK
+### Version 2 APK
 
-The first GitHub release includes a test-installable APK:
+The version 2 GitHub release includes a test-installable APK:
 
 ```text
-MyPocket-v1.0.0-debug.apk
+MyPocket-v2.0.0-debug.apk
 ```
 
-Download it from [My Pocket v1.0.0](https://github.com/TheAmazo/My_Pocket/releases/tag/v1.0.0).
+Download it from [My Pocket v2.0.0](https://github.com/TheAmazo/My_Pocket/releases/tag/v2.0.0).
 
 SHA-256:
 
 ```text
-e4e4062dd47f973bc305a819b82ff8b1f3eb98e01ccf45e4935016e497882095
+b598d0f44a2e37cb04316641ec3637ab7772ece0f22d2dd3152eebd2a4726d4b
 ```
 
-This APK is debug-signed for version 1 testing. A production APK should be signed with a private release keystore that stays outside Git.
+This APK is debug-signed for version 2 testing. A production APK should be signed with a private release keystore that stays outside Git.
 
 ---
 
@@ -80,7 +80,53 @@ My Pocket replaces a manual Word or spreadsheet savings sheet with a proper Andr
 
 ---
 
+## Preview
+
+### Light Card Mode
+
+<div align="center">
+
+<img src="Screenshots/light/onboard.png" width="170" alt="My Pocket light landing screen" />
+<img src="Screenshots/light/signup.png" width="170" alt="My Pocket light signup screen" />
+<img src="Screenshots/light/login.png" width="170" alt="My Pocket light login screen" />
+<img src="Screenshots/light/pockets.png" width="170" alt="My Pocket light pocket selector screen" />
+
+<br><br>
+
+<img src="Screenshots/light/board.png" width="170" alt="My Pocket light board screen" />
+<img src="Screenshots/light/summary.png" width="170" alt="My Pocket light summary screen" />
+<img src="Screenshots/light/settings.png" width="170" alt="My Pocket light settings screen" />
+<img src="Screenshots/light/profile.png" width="170" alt="My Pocket light profile screen" />
+
+</div>
+
+### Dark Glass Mode
+
+<div align="center">
+
+<img src="Screenshots/dark/onboard.png" width="170" alt="My Pocket dark landing screen" />
+<img src="Screenshots/dark/signup.png" width="170" alt="My Pocket dark signup screen" />
+<img src="Screenshots/dark/login.png" width="170" alt="My Pocket dark login screen" />
+
+<br><br>
+
+<img src="Screenshots/dark/pockets.png" width="170" alt="My Pocket dark pocket selector screen" />
+<img src="Screenshots/dark/settings.png" width="170" alt="My Pocket dark settings screen" />
+<img src="Screenshots/dark/profile.png" width="170" alt="My Pocket dark profile screen" />
+
+</div>
+
+---
+
 ## Highlights
+
+### Version 2 UI
+
+- Premium light card mode for clean daily use
+- Deep dark glass mode with bright contrast
+- Rounded finance-style cards, buttons, inputs, and board cells
+- Settings toggle for switching light and dark mode instantly
+- Password show and hide controls on password fields
 
 ### Savings Board
 
@@ -162,6 +208,9 @@ My_Pocket/
 │   └── my-pocket-icon.svg
 ├── docs/
 │   └── FIREBASE_SETUP.md
+├── Screenshots/
+│   ├── dark/
+│   └── light/
 ├── firestore.rules
 ├── firebase.json
 ├── gradle/
@@ -252,11 +301,11 @@ Profile avatars are stored as small compressed Base64 data strings:
 users/{uid}.photoData
 ```
 
-This keeps the first version compatible with Firebase Spark plan.
+This keeps the app compatible with Firebase Spark plan.
 
 ---
 
-## Version 1 Checklist
+## Version 2 Checklist
 
 - Email/password signup and verification
 - Google sign-in
