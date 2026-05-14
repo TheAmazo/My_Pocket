@@ -14,6 +14,8 @@ import com.thisara.mypocket.data.ReminderPolicy
 
 class ReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
+        rescheduleNextReminder(context)
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(
                 context,
@@ -36,5 +38,15 @@ class ReminderReceiver : BroadcastReceiver() {
             .build()
 
         context.getSystemService(NotificationManager::class.java).notify(1001, notification)
+    }
+
+    private fun rescheduleNextReminder(context: Context) {
+        val prefs = context.getSharedPreferences(ReminderScheduler.SETTINGS_BOOT_CACHE, Context.MODE_PRIVATE)
+        if (!prefs.getBoolean(ReminderScheduler.KEY_REMINDERS_ENABLED, true)) return
+
+        ReminderScheduler(context).scheduleDaily(
+            hour = prefs.getInt(ReminderScheduler.KEY_REMINDER_HOUR, 20),
+            minute = prefs.getInt(ReminderScheduler.KEY_REMINDER_MINUTE, 0),
+        )
     }
 }

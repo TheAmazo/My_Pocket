@@ -14,7 +14,10 @@ data class UserSession(
 data class Pocket(
     val id: String,
     val name: String,
+    val purpose: String = DEFAULT_POCKET_PURPOSE,
 )
+
+const val DEFAULT_POCKET_PURPOSE = "Personal savings pocket"
 
 data class SavingsCell(
     val id: String,

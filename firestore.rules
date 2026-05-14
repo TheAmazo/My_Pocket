@@ -70,12 +70,15 @@ service cloud.firestore {
     function validPocketData(data) {
       return data.keys().hasOnly([
           'name',
+          'purpose',
           'createdBy',
           'createdAt',
           'updatedAt'
         ])
         && data.createdBy == request.auth.uid
-        && validString(data, 'name', 40);
+        && validString(data, 'name', 40)
+        && hasField(data, 'purpose')
+        && validString(data, 'purpose', 140);
     }
 
     function validMonthData(data, monthId) {
@@ -151,11 +154,12 @@ service cloud.firestore {
       allow read: if isPocketResourceOwner();
       allow create: if signedIn()
         && validPocketData(request.resource.data)
-        && request.resource.data.keys().hasAll(['name', 'createdBy', 'createdAt']);
+        && request.resource.data.keys().hasAll(['name', 'purpose', 'createdBy', 'createdAt']);
       allow update: if isPocketOwner(pocketId)
         && request.resource.data.createdBy == resource.data.createdBy
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'name',
+          'purpose',
           'updatedAt'
         ])
         && validPocketData(request.resource.data);

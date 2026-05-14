@@ -1,6 +1,7 @@
 package com.thisara.mypocket.ui.theme
 
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
@@ -13,11 +14,12 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.thisara.mypocket.data.ThemeMode
 
-val PocketElectric = Color(0xFF2F2FE4)
-val PocketRoyal = Color(0xFF162E93)
-val PocketMidnight = Color(0xFF1A1953)
-val PocketVoid = Color(0xFF080616)
+val PocketElectric = Color(0xFF0A84FF)
+val PocketRoyal = Color(0xFF3056F6)
+val PocketMidnight = Color(0xFF141416)
+val PocketVoid = Color(0xFF050506)
 
 val PocketBlue = PocketElectric
 val PocketYellow = Color(0xFFFFD928)
@@ -85,31 +87,31 @@ private val LightPocketStyle = PocketStyleColors(
 private val DarkPocketStyle = PocketStyleColors(
     isDark = true,
     backgroundGradient = listOf(
-        PocketVoid,
-        Color(0xFF0C1229),
-        PocketMidnight,
-        PocketVoid,
+        Color(0xFF050506),
+        Color(0xFF0B0B0D),
+        Color(0xFF141416),
+        Color(0xFF070708),
     ),
     appIconGradient = listOf(
-        PocketElectric,
-        Color(0xFF33D6FF),
-        Color(0xFFFF4D9A),
+        Color(0xFF2EA8FF),
+        Color(0xFF3056F6),
+        Color(0xFF8F2FD9),
     ),
-    glass = Color(0x66303A67),
-    glassStrong = Color(0xCC202744),
-    glassSelected = Color(0xCC162E93),
-    glassStroke = Color(0x668FA2FF),
-    glassStrokeStrong = Color(0xCC8FA2FF),
-    navigationGlass = Color(0xE60C1229),
-    progressTrack = Color(0xFF252C4D),
-    textMuted = Color(0xFFC8D0EE),
-    openCell = Color(0xCC202744),
-    savedCell = Color(0xFF2F65FF),
-    lockedCell = Color(0x99080616),
-    openCellContent = Color(0xFFF6F8FF),
+    glass = Color.White.copy(alpha = 0.08f),
+    glassStrong = Color.White.copy(alpha = 0.14f),
+    glassSelected = Color.White.copy(alpha = 0.20f),
+    glassStroke = Color.White.copy(alpha = 0.18f),
+    glassStrokeStrong = Color.White.copy(alpha = 0.36f),
+    navigationGlass = Color(0xE6080809),
+    progressTrack = Color.White.copy(alpha = 0.12f),
+    textMuted = Color(0xFFC8C8CF),
+    openCell = Color.White.copy(alpha = 0.12f),
+    savedCell = Color(0xFF0A84FF),
+    lockedCell = Color.White.copy(alpha = 0.06f),
+    openCellContent = Color(0xFFF7F7F9),
     savedCellContent = Color.White,
-    lockedCellContent = Color(0x99C8D0EE),
-    loadingOverlay = PocketVoid.copy(alpha = 0.74f),
+    lockedCellContent = Color(0x99E6E6EA),
+    loadingOverlay = Color.Black.copy(alpha = 0.70f),
 )
 
 private val LocalPocketStyle = staticCompositionLocalOf { LightPocketStyle }
@@ -140,20 +142,20 @@ private val LightGlassColors: ColorScheme = lightColorScheme(
 )
 
 private val DarkGlassColors: ColorScheme = darkColorScheme(
-    primary = Color(0xFF5F78FF),
+    primary = Color(0xFF0A84FF),
     onPrimary = Color.White,
-    secondary = Color(0xFFFF4D9A),
+    secondary = Color(0xFFFF5B8C),
     onSecondary = Color.White,
-    tertiary = Color(0xFF33D6FF),
-    onTertiary = Color.White,
+    tertiary = Color(0xFFFFD948),
+    onTertiary = Color(0xFF141416),
     background = PocketVoid,
-    onBackground = Color(0xFFF6F8FF),
-    surface = Color(0xFF0C1229),
-    onSurface = Color(0xFFF6F8FF),
-    surfaceVariant = Color(0xFF202744),
-    onSurfaceVariant = Color(0xFFC8D0EE),
-    outline = Color(0x668FA2FF),
-    error = Color(0xFFFF4D7D),
+    onBackground = Color(0xFFF7F7F9),
+    surface = Color(0xFF111114),
+    onSurface = Color(0xFFF7F7F9),
+    surfaceVariant = Color(0xFF1C1C20),
+    onSurfaceVariant = Color(0xFFC8C8CF),
+    outline = Color.White.copy(alpha = 0.24f),
+    error = Color(0xFFFF453A),
     onError = Color.White,
 )
 
@@ -166,9 +168,10 @@ private val PocketShapes = Shapes(
 )
 
 @Composable
-fun MyPocketTheme(darkModeEnabled: Boolean = false, content: @Composable () -> Unit) {
-    val colorScheme = if (darkModeEnabled) DarkGlassColors else LightGlassColors
-    val styleColors = if (darkModeEnabled) DarkPocketStyle else LightPocketStyle
+fun MyPocketTheme(themeMode: ThemeMode = ThemeMode.SYSTEM, content: @Composable () -> Unit) {
+    val darkTheme = resolveDarkTheme(themeMode = themeMode)
+    val colorScheme = if (darkTheme) DarkGlassColors else LightGlassColors
+    val styleColors = if (darkTheme) DarkPocketStyle else LightPocketStyle
 
     CompositionLocalProvider(LocalPocketStyle provides styleColors) {
         MaterialTheme(
@@ -177,5 +180,14 @@ fun MyPocketTheme(darkModeEnabled: Boolean = false, content: @Composable () -> U
             typography = MaterialTheme.typography,
             content = content,
         )
+    }
+}
+
+@Composable
+fun resolveDarkTheme(themeMode: ThemeMode): Boolean {
+    return when (themeMode) {
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
     }
 }

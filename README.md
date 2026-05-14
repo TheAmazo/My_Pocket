@@ -17,9 +17,9 @@
 ╚═╝     ╚═╝   ╚═╝       ╚═╝      ╚═════╝  ╚═════╝╚═╝  ╚═╝╚══════╝   ╚═╝
 </pre>
 
-### A personal monthly savings board without messy marks or wrong totals
+### A glassy personal savings board for monthly goals, pocket purpose, and calm daily tracking
 
-No spreadsheet chaos • Clean monthly targets • Firebase sync • Daily reminders
+Black glass UI • Clean monthly targets • Firebase sync • Smart reminders
 
 ![Release](https://img.shields.io/github/v/release/TheAmazo/My_Pocket?style=for-the-badge&logo=github&logoColor=white&labelColor=18181B&color=03AED2)
 ![Downloads](https://img.shields.io/github/downloads/TheAmazo/My_Pocket/total?style=for-the-badge&logo=github&logoColor=white&labelColor=18181B&color=F45B26)
@@ -48,35 +48,46 @@ No spreadsheet chaos • Clean monthly targets • Firebase sync • Daily remin
 
 <br><br>
 
-<a href="https://github.com/TheAmazo/My_Pocket/releases/download/v2.0.0/MyPocket-v2.0.0-debug.apk">
-  <img src="https://img.shields.io/badge/Download%20APK-v2.0.0-F45B26?style=for-the-badge&logo=android&logoColor=white" alt="Download My Pocket v2.0.0 APK" />
+<a href="https://github.com/TheAmazo/My_Pocket/releases/download/v3.0.0/MyPocket-v3.0.0-debug.apk">
+  <img src="https://img.shields.io/badge/Download%20APK-v3.0.0-F45B26?style=for-the-badge&logo=android&logoColor=white" alt="Download My Pocket v3.0.0 APK" />
 </a>
 
 </div>
 
-### Version 2 APK
+### Version 3 APK
 
-The version 2 GitHub release includes a test-installable APK:
+The version 3 GitHub release includes a test-installable APK:
 
 ```text
-MyPocket-v2.0.0-debug.apk
+MyPocket-v3.0.0-debug.apk
 ```
 
-Download it from [My Pocket v2.0.0](https://github.com/TheAmazo/My_Pocket/releases/tag/v2.0.0).
+Download it from [My Pocket v3.0.0](https://github.com/TheAmazo/My_Pocket/releases/tag/v3.0.0).
 
 SHA-256:
 
 ```text
-b598d0f44a2e37cb04316641ec3637ab7772ece0f22d2dd3152eebd2a4726d4b
+8bd1d757406fc29c052704efb36b07e1e7120518ed7ed53f9a1e3b9107241f42
 ```
 
-This APK is debug-signed for version 2 testing. A production APK should be signed with a private release keystore that stays outside Git.
+This APK is debug-signed for version 3 testing. A production APK should be signed with a private release keystore that stays outside Git.
+
+### What Is New In v3
+
+- A refined iOS-inspired black glass dark theme with white-blend glass cards.
+- A unified wallet logo across launcher, onboarding, pocket picker, and README.
+- Pocket creation now captures both pocket name and purpose.
+- Pocket headers now show the selected pocket name instead of a repeated app title.
+- Summary is cleaner with one yearly saved card above monthly history.
+- Daily reminders support both hour and minute settings.
+- Theme settings now support System follow, Light, and Dark.
+- Google sign-in error 10 now explains the Firebase SHA fingerprint fix clearly.
 
 ---
 
 ## Why My Pocket?
 
-My Pocket replaces a manual Word or spreadsheet savings sheet with a proper Android app. Instead of marking cells by hand, forgetting days, or calculating totals wrongly, you get a clean monthly board that tracks saved, remaining, missed, monthly history, yearly history, and reminders automatically.
+My Pocket replaces manual savings sheets with a focused Android app. Each pocket can have its own purpose, every month gets a clean savings board, and the app keeps saved totals, remaining amounts, yearly progress, and reminders in sync without messy marks or wrong calculations.
 
 ---
 
@@ -100,7 +111,7 @@ My Pocket replaces a manual Word or spreadsheet savings sheet with a proper Andr
 
 </div>
 
-### Dark Glass Mode
+### iOS-Inspired Black Glass Mode
 
 <div align="center">
 
@@ -120,12 +131,13 @@ My Pocket replaces a manual Word or spreadsheet savings sheet with a proper Andr
 
 ## Highlights
 
-### Version 2 UI
+### Version 3 Experience
 
 - Premium light card mode for clean daily use
-- Deep dark glass mode with bright contrast
+- iOS 26-inspired black glass dark mode with bright contrast
 - Rounded finance-style cards, buttons, inputs, and board cells
-- Settings toggle for switching light and dark mode instantly
+- Theme modes for System follow, Light, and Dark
+- Unified wallet logo across launcher, onboarding, pocket picker, and README
 - Password show and hide controls on password fields
 
 ### Savings Board
@@ -139,8 +151,8 @@ My Pocket replaces a manual Word or spreadsheet savings sheet with a proper Andr
 
 ### Pockets
 
-- Create multiple personal pockets
-- Rename pockets safely
+- Create multiple personal pockets with a custom purpose
+- Edit pocket name and purpose safely
 - Delete pockets only after confirmation
 - Duplicate pocket names are blocked
 - Deleting one pocket does not damage the rest of the account
@@ -148,6 +160,7 @@ My Pocket replaces a manual Word or spreadsheet savings sheet with a proper Andr
 ### Summary
 
 - Yearly overview with 12 month cards
+- Single Yearly saved card above monthly summaries
 - Saved total, missed amount, completed cells, and progress per month
 - Month detail screen shows every day of the month
 - Saved rows include amount, saved time, and saved user name
@@ -167,6 +180,7 @@ My Pocket replaces a manual Word or spreadsheet savings sheet with a proper Andr
 - Google sign-in support
 - Owner-only Firestore rules
 - Firestore validation for users, pockets, months, and cells
+- Clear Google status code 10 guidance for missing Firebase SHA fingerprints
 - No Firebase Storage required for avatars
 - Cleartext HTTP disabled
 - Android backup disabled for app data
@@ -295,6 +309,14 @@ pockets/{pocketId}/months/{monthKey}
 pockets/{pocketId}/months/{monthKey}/cells/{cellId}
 ```
 
+Pocket documents include the owner, display name, and purpose:
+
+```text
+pockets/{pocketId}.name
+pockets/{pocketId}.purpose
+pockets/{pocketId}.createdBy
+```
+
 Profile avatars are stored as small compressed Base64 data strings:
 
 ```text
@@ -305,18 +327,18 @@ This keeps the app compatible with Firebase Spark plan.
 
 ---
 
-## Version 2 Checklist
+## Version 3 Checklist
 
 - Email/password signup and verification
 - Google sign-in
-- Create, rename, delete, and switch pockets
+- Create, edit, delete, and switch pockets
 - Duplicate pocket-name blocking
 - Monthly savings board
 - Multiple saves per day
 - Locked previous-day cells
 - Yearly and monthly summary
 - Profile edit, avatar, password, and account delete tools
-- Daily reminders
+- Daily reminders with hour and minute settings
 - Responsive UI for phones, tablets, portrait, and landscape
 - Firestore rules validated with the local emulator
 
