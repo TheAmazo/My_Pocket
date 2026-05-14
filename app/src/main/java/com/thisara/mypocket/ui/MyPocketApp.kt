@@ -15,6 +15,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -134,6 +135,7 @@ import com.thisara.mypocket.data.MonthBoard
 import com.thisara.mypocket.data.MonthSummary
 import com.thisara.mypocket.data.Pocket
 import com.thisara.mypocket.data.SavingsCell
+import com.thisara.mypocket.data.ThemeMode
 import com.thisara.mypocket.data.canToggle
 import com.thisara.mypocket.data.isLocked
 import com.thisara.mypocket.data.sortRank
@@ -236,7 +238,7 @@ fun MyPocketApp(viewModel: MainViewModel) {
                         currentPocketId = state.pocket?.id,
                         onSelect = viewModel::switchPocket,
                         onCreate = viewModel::createPocket,
-                        onRename = viewModel::renamePocket,
+                        onUpdate = viewModel::updatePocket,
                         onDelete = viewModel::deletePocket,
                         onSignOut = viewModel::signOut,
                     )
@@ -250,8 +252,8 @@ fun MyPocketApp(viewModel: MainViewModel) {
                         onRepairBoard = viewModel::repairCurrentBoard,
                         onReminderEnabled = viewModel::setRemindersEnabled,
                         onReminderHour = viewModel::setReminderHour,
-                        onDarkModeEnabled = viewModel::setDarkModeEnabled,
-                        onSignOut = viewModel::signOut,
+                        onReminderMinute = viewModel::setReminderMinute,
+                        onThemeMode = viewModel::setThemeMode,
                         onPreviousSummaryYear = viewModel::previousSummaryYear,
                         onNextSummaryYear = viewModel::nextSummaryYear,
                         onOpenSummaryMonth = viewModel::openSummaryMonth,
@@ -398,16 +400,9 @@ private fun LandingScreen(onSignUp: () -> Unit, onSignIn: () -> Unit) {
 
 @Composable
 private fun AppIconMark(size: Dp) {
-    val style = PocketTheme.colors
     Box(
         modifier = Modifier
-            .size(size)
-            .clip(CircleShape)
-            .background(
-                Brush.linearGradient(
-                    style.appIconGradient,
-                ),
-            ),
+            .size(size),
         contentAlignment = Alignment.Center,
     ) {
         Image(
@@ -502,7 +497,9 @@ private fun AuthPanel(
             fontWeight = FontWeight.Black,
             color = MaterialTheme.colorScheme.onBackground,
         )
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
+        SectionSurface {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
+        }
     }
 }
 
@@ -598,15 +595,18 @@ private fun PocketSelectorScreen(
     pockets: List<Pocket>,
     currentPocketId: String?,
     onSelect: (String) -> Unit,
-    onCreate: (String) -> Unit,
-    onRename: (String, String) -> Unit,
+    onCreate: (String, String) -> Unit,
+    onUpdate: (String, String, String) -> Unit,
     onDelete: (String) -> Unit,
     onSignOut: () -> Unit,
 ) {
     val style = PocketTheme.colors
-    var pocketName by remember { mutableStateOf("My Pocket") }
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var createName by remember { mutableStateOf("") }
+    var createPurpose by remember { mutableStateOf("") }
     var renameTarget by remember { mutableStateOf<Pocket?>(null) }
     var renameName by remember { mutableStateOf("") }
+    var renamePurpose by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<Pocket?>(null) }
     var deleteConfirmation by remember { mutableStateOf("") }
 
@@ -646,15 +646,21 @@ private fun PocketSelectorScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(pocket.name, fontWeight = FontWeight.Black)
-                                Text("Personal savings pocket", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    pocket.purpose,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                             }
                             IconButton(
                                 onClick = {
                                     renameTarget = pocket
                                     renameName = pocket.name
+                                    renamePurpose = pocket.purpose
                                 },
                             ) {
-                                Icon(Icons.Rounded.Edit, contentDescription = "Rename pocket", tint = PocketBlue)
+                                Icon(Icons.Rounded.Edit, contentDescription = "Edit pocket", tint = PocketBlue)
                             }
                             IconButton(
                                 onClick = {
@@ -672,25 +678,13 @@ private fun PocketSelectorScreen(
                 }
             }
             item {
-                SectionSurface {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(
-                            text = if (pockets.isEmpty()) "Create your first pocket" else "Create another pocket",
-                            fontWeight = FontWeight.Bold,
-                        )
-                        OutlinedTextField(
-                            value = pocketName,
-                            onValueChange = { pocketName = it },
-                            label = { Text("Pocket name") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                        )
-                        Button(onClick = { onCreate(pocketName) }, modifier = Modifier.fillMaxWidth()) {
-                            Icon(Icons.Rounded.Add, contentDescription = null)
-                            Spacer(Modifier.size(8.dp))
-                            Text("Create pocket")
-                        }
-                    }
+                Button(
+                    onClick = { showCreateDialog = true },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Rounded.Add, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text("Create new pocket")
                 }
             }
             item {
@@ -710,31 +704,89 @@ private fun PocketSelectorScreen(
         }
     }
 
-    renameTarget?.let { pocket ->
+    if (showCreateDialog) {
         AlertDialog(
-            onDismissRequest = { renameTarget = null },
-            title = { Text("Rename pocket") },
+            onDismissRequest = { showCreateDialog = false },
+            title = { Text("Create new pocket") },
             text = {
-                OutlinedTextField(
-                    value = renameName,
-                    onValueChange = { renameName = it },
-                    label = { Text("Pocket name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    supportingText = {
-                        if (renameName.isBlank()) Text("Name cannot be blank.")
-                    },
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    AppIconMark(size = 58.dp)
+                    OutlinedTextField(
+                        value = createName,
+                        onValueChange = { createName = it },
+                        label = { Text("Pocket name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = createPurpose,
+                        onValueChange = { createPurpose = it },
+                        label = { Text("Purpose") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2,
+                        maxLines = 3,
+                    )
+                }
             },
             confirmButton = {
                 Button(
-                    enabled = renameName.isNotBlank(),
+                    enabled = createName.isNotBlank() && createPurpose.isNotBlank(),
                     onClick = {
-                        onRename(pocket.id, renameName)
+                        onCreate(createName, createPurpose)
+                        createName = ""
+                        createPurpose = ""
+                        showCreateDialog = false
+                    },
+                ) {
+                    Text("Done")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateDialog = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+
+    renameTarget?.let { pocket ->
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("Edit pocket") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = renameName,
+                        onValueChange = { renameName = it },
+                        label = { Text("Pocket name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        supportingText = {
+                            if (renameName.isBlank()) Text("Name cannot be blank.")
+                        },
+                    )
+                    OutlinedTextField(
+                        value = renamePurpose,
+                        onValueChange = { renamePurpose = it },
+                        label = { Text("Purpose") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2,
+                        maxLines = 3,
+                        supportingText = {
+                            if (renamePurpose.isBlank()) Text("Purpose cannot be blank.")
+                        },
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = renameName.isNotBlank() && renamePurpose.isNotBlank(),
+                    onClick = {
+                        onUpdate(pocket.id, renameName, renamePurpose)
                         renameTarget = null
                     },
                 ) {
-                    Text("Save")
+                    Text("Done")
                 }
             },
             dismissButton = {
@@ -799,8 +851,8 @@ private fun HomeScreen(
     onRepairBoard: () -> Unit,
     onReminderEnabled: (Boolean) -> Unit,
     onReminderHour: (Int) -> Unit,
-    onDarkModeEnabled: (Boolean) -> Unit,
-    onSignOut: () -> Unit,
+    onReminderMinute: (Int) -> Unit,
+    onThemeMode: (ThemeMode) -> Unit,
     onPreviousSummaryYear: () -> Unit,
     onNextSummaryYear: () -> Unit,
     onOpenSummaryMonth: (String) -> Unit,
@@ -827,8 +879,8 @@ private fun HomeScreen(
                     onRepairBoard = onRepairBoard,
                     onReminderEnabled = onReminderEnabled,
                     onReminderHour = onReminderHour,
-                    onDarkModeEnabled = onDarkModeEnabled,
-                    onSignOut = onSignOut,
+                    onReminderMinute = onReminderMinute,
+                    onThemeMode = onThemeMode,
                     onPreviousSummaryYear = onPreviousSummaryYear,
                     onNextSummaryYear = onNextSummaryYear,
                     onOpenSummaryMonth = onOpenSummaryMonth,
@@ -853,8 +905,8 @@ private fun HomeScreen(
                 onRepairBoard = onRepairBoard,
                 onReminderEnabled = onReminderEnabled,
                 onReminderHour = onReminderHour,
-                onDarkModeEnabled = onDarkModeEnabled,
-                onSignOut = onSignOut,
+                onReminderMinute = onReminderMinute,
+                onThemeMode = onThemeMode,
                 onPreviousSummaryYear = onPreviousSummaryYear,
                 onNextSummaryYear = onNextSummaryYear,
                 onOpenSummaryMonth = onOpenSummaryMonth,
@@ -883,8 +935,8 @@ private fun HomeScaffold(
     onRepairBoard: () -> Unit,
     onReminderEnabled: (Boolean) -> Unit,
     onReminderHour: (Int) -> Unit,
-    onDarkModeEnabled: (Boolean) -> Unit,
-    onSignOut: () -> Unit,
+    onReminderMinute: (Int) -> Unit,
+    onThemeMode: (ThemeMode) -> Unit,
     onPreviousSummaryYear: () -> Unit,
     onNextSummaryYear: () -> Unit,
     onOpenSummaryMonth: (String) -> Unit,
@@ -901,7 +953,8 @@ private fun HomeScaffold(
         topBar = {
             if (state.selectedTab != HomeTab.History) {
                 HomeTopBar(
-                    pocketName = state.pocket?.name.orEmpty(),
+                    pocket = state.pocket,
+                    selectedTab = state.selectedTab,
                     onShowPockets = onShowPockets,
                 )
             }
@@ -926,8 +979,8 @@ private fun HomeScaffold(
                 onRepairBoard = onRepairBoard,
                 onReminderEnabled = onReminderEnabled,
                 onReminderHour = onReminderHour,
-                onDarkModeEnabled = onDarkModeEnabled,
-                onSignOut = onSignOut,
+                onReminderMinute = onReminderMinute,
+                onThemeMode = onThemeMode,
                 onPreviousSummaryYear = onPreviousSummaryYear,
                 onNextSummaryYear = onNextSummaryYear,
                 onOpenSummaryMonth = onOpenSummaryMonth,
@@ -945,7 +998,14 @@ private fun HomeScaffold(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HomeTopBar(pocketName: String, onShowPockets: () -> Unit) {
+private fun HomeTopBar(
+    pocket: Pocket?,
+    selectedTab: HomeTab,
+    onShowPockets: () -> Unit,
+) {
+    val title = if (selectedTab == HomeTab.Profile) "Profile" else pocket?.name.orEmpty()
+    val subtitle = if (selectedTab == HomeTab.Profile) null else pocket?.purpose
+
     TopAppBar(
         navigationIcon = {
             IconButton(onClick = onShowPockets) {
@@ -954,12 +1014,16 @@ private fun HomeTopBar(pocketName: String, onShowPockets: () -> Unit) {
         },
         title = {
             Column {
-                Text("My Pocket", fontWeight = FontWeight.Black)
-                Text(
-                    pocketName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Text(title.ifBlank { "Pocket" }, fontWeight = FontWeight.Black)
+                subtitle?.takeIf { it.isNotBlank() }?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(
@@ -1026,8 +1090,8 @@ private fun HomeTabContent(
     onRepairBoard: () -> Unit,
     onReminderEnabled: (Boolean) -> Unit,
     onReminderHour: (Int) -> Unit,
-    onDarkModeEnabled: (Boolean) -> Unit,
-    onSignOut: () -> Unit,
+    onReminderMinute: (Int) -> Unit,
+    onThemeMode: (ThemeMode) -> Unit,
     onPreviousSummaryYear: () -> Unit,
     onNextSummaryYear: () -> Unit,
     onOpenSummaryMonth: (String) -> Unit,
@@ -1058,8 +1122,8 @@ private fun HomeTabContent(
             settings = settings,
             onReminderEnabled = onReminderEnabled,
             onReminderHour = onReminderHour,
-            onDarkModeEnabled = onDarkModeEnabled,
-            onSignOut = onSignOut,
+            onReminderMinute = onReminderMinute,
+            onThemeMode = onThemeMode,
         )
         HomeTab.Profile -> ProfileScreen(
             state = state,
@@ -1217,12 +1281,7 @@ private fun BoardScreen(
 @Composable
 private fun TodayBanner(todayKey: String) {
     val style = PocketTheme.colors
-    Surface(
-        color = style.glassStrong,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        shape = GlassCardShape,
-        border = BorderStroke(1.dp, style.glassStroke),
-        tonalElevation = 0.dp,
+    GlassSurface(
         shadowElevation = 12.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -1307,13 +1366,8 @@ private fun SummaryMetricRow(metrics: List<SummaryMetric>, modifier: Modifier = 
 
 @Composable
 private fun SummaryTile(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
-    val style = PocketTheme.colors
-    Surface(
-        color = style.glassStrong,
-        contentColor = MaterialTheme.colorScheme.onSurface,
+    GlassSurface(
         shape = GlassCompactShape,
-        border = BorderStroke(1.dp, style.glassStroke),
-        tonalElevation = 0.dp,
         shadowElevation = 12.dp,
         modifier = modifier,
     ) {
@@ -1439,10 +1493,6 @@ private fun SummaryYearOverview(
     val monthKeys = remember(state.selectedSummaryYear) { monthKeysForYear(state.selectedSummaryYear) }
     val summaries = monthKeys.mapNotNull { state.summaryForMonth(it) }
     val savedTotal = summaries.sumOf { it.savedTotal }
-    val targetTotal = summaries.sumOf { it.targetTotal }
-    val missedTotal = (targetTotal - savedTotal).coerceAtLeast(0)
-    val completedCells = summaries.sumOf { it.savedCount }
-    val totalCells = summaries.sumOf { it.cellCount }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val compact = maxWidth < 360.dp
@@ -1488,12 +1538,9 @@ private fun SummaryYearOverview(
                 }
             }
             item(span = { GridItemSpan(maxLineSpan) }) {
-                SummaryMetricRow(
-                    metrics = listOf(
-                        SummaryMetric("Saved", "Rs. $savedTotal", PocketBlue),
-                        SummaryMetric("Missed", "Rs. $missedTotal", PocketRose),
-                        SummaryMetric("Cells", "$completedCells/$totalCells", PocketOrange),
-                    ),
+                YearlySavedCard(
+                    year = state.selectedSummaryYear,
+                    savedTotal = savedTotal,
                 )
             }
             items(monthKeys, key = { it }) { key ->
@@ -1512,6 +1559,38 @@ private fun SummaryYearOverview(
 }
 
 @Composable
+private fun YearlySavedCard(year: Int, savedTotal: Int) {
+    val style = PocketTheme.colors
+    GlassSurface(
+        borderColor = style.glassStrokeStrong,
+        shadowElevation = 16.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(18.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
+                Text("Yearly saved", fontWeight = FontWeight.Black)
+                Text(
+                    "$year total",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Text(
+                "Rs. $savedTotal",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Black,
+                color = PocketBlue,
+                textAlign = TextAlign.End,
+            )
+        }
+    }
+}
+
+@Composable
 private fun MonthCard(
     monthKey: String,
     summary: MonthSummary?,
@@ -1525,12 +1604,7 @@ private fun MonthCard(
     val cellCount = summary?.cellCount ?: 0
     val progress = if (cellCount == 0) 0f else savedCount.toFloat() / cellCount.toFloat()
 
-    Surface(
-        color = style.glassStrong,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        shape = GlassCardShape,
-        border = BorderStroke(1.dp, style.glassStroke),
-        tonalElevation = 0.dp,
+    GlassSurface(
         shadowElevation = 14.dp,
         modifier = modifier.clickable(onClick = onClick),
     ) {
@@ -1643,12 +1717,9 @@ private fun MonthDetailScreen(
 private fun MonthDayCard(dayKey: String, cells: List<SavingsCell>) {
     val style = PocketTheme.colors
     val savedTotal = cells.sumOf { it.amount }
-    Surface(
+    GlassSurface(
         color = if (cells.isEmpty()) style.glass else style.glassStrong,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        shape = GlassCardShape,
-        border = BorderStroke(1.dp, if (cells.isEmpty()) style.glassStroke.copy(alpha = 0.72f) else style.glassStroke),
-        tonalElevation = 0.dp,
+        borderColor = if (cells.isEmpty()) style.glassStroke.copy(alpha = 0.72f) else style.glassStroke,
         shadowElevation = 12.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -1733,14 +1804,6 @@ private fun ProfileScreen(
             contentPadding = PaddingValues(horizontal = sidePadding, vertical = 16.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
-            item {
-                Text(
-                    "Profile",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Black,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-            }
             item {
                 SectionSurface {
                     Column(
@@ -2142,8 +2205,8 @@ private fun SettingsScreen(
     settings: AppSettings,
     onReminderEnabled: (Boolean) -> Unit,
     onReminderHour: (Int) -> Unit,
-    onDarkModeEnabled: (Boolean) -> Unit,
-    onSignOut: () -> Unit,
+    onReminderMinute: (Int) -> Unit,
+    onThemeMode: (ThemeMode) -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val sidePadding = adaptiveSidePadding(maxWidth)
@@ -2171,29 +2234,40 @@ private fun SettingsScreen(
                             fontWeight = FontWeight.Black,
                             letterSpacing = 0.sp,
                         )
+                        pocket?.purpose?.takeIf { it.isNotBlank() }?.let {
+                            Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
             }
             item {
                 SectionSurface {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Rounded.Settings, contentDescription = null)
-                                Spacer(Modifier.size(8.dp))
-                                Text("Dark mode", fontWeight = FontWeight.Bold)
-                            }
-                            Switch(checked = settings.darkModeEnabled, onCheckedChange = onDarkModeEnabled)
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.Settings, contentDescription = null)
+                            Spacer(Modifier.size(8.dp))
+                            Text("Theme", fontWeight = FontWeight.Bold)
                         }
-                        Text(
-                            if (settings.darkModeEnabled) "Deep glass mode is active." else "Light card mode is active.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            ThemeModeChip(
+                                label = "System follow",
+                                selected = settings.themeMode == ThemeMode.SYSTEM,
+                                onClick = { onThemeMode(ThemeMode.SYSTEM) },
+                                modifier = Modifier.weight(1f),
+                            )
+                            ThemeModeChip(
+                                label = "Light",
+                                selected = settings.themeMode == ThemeMode.LIGHT,
+                                onClick = { onThemeMode(ThemeMode.LIGHT) },
+                                modifier = Modifier.weight(1f),
+                            )
+                            ThemeModeChip(
+                                label = "Dark",
+                                selected = settings.themeMode == ThemeMode.DARK,
+                                onClick = { onThemeMode(ThemeMode.DARK) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
                     }
                 }
             }
@@ -2223,20 +2297,33 @@ private fun SettingsScreen(
                                 IconButton(onClick = { onReminderHour(settings.reminderHour - 1) }) {
                                     Icon(Icons.Rounded.Remove, contentDescription = "Earlier")
                                 }
-                                Text("${settings.reminderHour.toString().padStart(2, '0')}:00")
+                                Text(
+                                    "${settings.reminderHour.toString().padStart(2, '0')}:${
+                                        settings.reminderMinute.toString().padStart(2, '0')
+                                    }",
+                                )
                                 IconButton(onClick = { onReminderHour(settings.reminderHour + 1) }) {
                                     Icon(Icons.Rounded.Add, contentDescription = "Later")
                                 }
                             }
                         }
+                        Row(
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Reminder minutes")
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { onReminderMinute(settings.reminderMinute - 1) }) {
+                                    Icon(Icons.Rounded.Remove, contentDescription = "Less minutes")
+                                }
+                                Text(settings.reminderMinute.toString().padStart(2, '0'))
+                                IconButton(onClick = { onReminderMinute(settings.reminderMinute + 1) }) {
+                                    Icon(Icons.Rounded.Add, contentDescription = "More minutes")
+                                }
+                            }
+                        }
                     }
-                }
-            }
-            item {
-                OutlinedButton(onClick = onSignOut, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.AutoMirrored.Rounded.Logout, contentDescription = null)
-                    Spacer(Modifier.size(8.dp))
-                    Text("Sign out")
                 }
             }
         }
@@ -2244,18 +2331,69 @@ private fun SettingsScreen(
 }
 
 @Composable
-private fun SectionSurface(content: @Composable () -> Unit) {
-    val style = PocketTheme.colors
+private fun ThemeModeChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = {
+            Text(
+                text = label,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        modifier = modifier,
+    )
+}
 
+@Composable
+private fun GlassSurface(
+    modifier: Modifier = Modifier,
+    shape: RoundedCornerShape = GlassCardShape,
+    color: Color? = null,
+    borderColor: Color? = null,
+    shadowElevation: Dp = 16.dp,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    val style = PocketTheme.colors
     Surface(
-        color = style.glassStrong,
+        color = color ?: style.glassStrong,
         contentColor = MaterialTheme.colorScheme.onSurface,
-        shape = GlassCardShape,
-        border = BorderStroke(1.dp, style.glassStroke),
+        shape = shape,
+        border = BorderStroke(1.dp, borderColor ?: style.glassStroke),
         tonalElevation = 0.dp,
-        shadowElevation = 16.dp,
-        modifier = Modifier.fillMaxWidth(),
+        shadowElevation = shadowElevation,
+        modifier = modifier,
     ) {
+        Box {
+            if (style.isDark) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color.White.copy(alpha = 0.14f),
+                                    Color.White.copy(alpha = 0.04f),
+                                    Color.Transparent,
+                                ),
+                            ),
+                        ),
+                )
+            }
+            content()
+        }
+    }
+}
+
+@Composable
+private fun SectionSurface(content: @Composable () -> Unit) {
+    GlassSurface(modifier = Modifier.fillMaxWidth()) {
         Box(Modifier.padding(20.dp)) {
             content()
         }
@@ -2265,13 +2403,9 @@ private fun SectionSurface(content: @Composable () -> Unit) {
 @Composable
 private fun EmptyState(text: String) {
     val style = PocketTheme.colors
-
-    Surface(
+    GlassSurface(
         color = style.glass,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        shape = GlassCardShape,
-        border = BorderStroke(1.dp, style.glassStroke.copy(alpha = 0.72f)),
-        tonalElevation = 0.dp,
+        borderColor = style.glassStroke.copy(alpha = 0.72f),
         shadowElevation = 10.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {

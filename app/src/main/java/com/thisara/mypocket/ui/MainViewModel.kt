@@ -18,6 +18,7 @@ import com.thisara.mypocket.data.Pocket
 import com.thisara.mypocket.data.SavingsBoardGenerator
 import com.thisara.mypocket.data.SavingsCell
 import com.thisara.mypocket.data.SettingsStore
+import com.thisara.mypocket.data.ThemeMode
 import com.thisara.mypocket.data.UserSession
 import com.thisara.mypocket.data.canToggle
 import com.thisara.mypocket.reminders.ReminderScheduler
@@ -148,7 +149,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             settingsStore.settings.collect { appSettings ->
                 cacheBootSettings(appSettings)
                 if (appSettings.remindersEnabled) {
-                    reminderScheduler.scheduleDaily(appSettings.reminderHour)
+                    reminderScheduler.scheduleDaily(
+                        hour = appSettings.reminderHour,
+                        minute = appSettings.reminderMinute,
+                    )
                 } else {
                     reminderScheduler.cancel()
                 }
@@ -246,8 +250,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         refreshVerification(showLoading = false)
     }
 
-    fun createPocket(name: String) {
+    fun createPocket(name: String, purpose: String) {
         val cleanName = name.cleanPocketName()
+        val cleanPurpose = purpose.cleanPocketName()
         if (cleanName.isBlank()) {
             mutableState.update { it.copy(message = "Give your pocket a name.") }
             return
@@ -260,15 +265,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             mutableState.update { it.copy(message = "You already have a pocket with that name.") }
             return
         }
+        if (cleanPurpose.isBlank()) {
+            mutableState.update { it.copy(message = "Tell the purpose of this pocket.") }
+            return
+        }
+        if (cleanPurpose.length > MAX_POCKET_PURPOSE_LENGTH) {
+            mutableState.update { it.copy(message = "Pocket purpose must be $MAX_POCKET_PURPOSE_LENGTH characters or less.") }
+            return
+        }
 
         runLoading {
-            repository.createPocket(cleanName)
+            repository.createPocket(cleanName, cleanPurpose)
             mutableState.update { it.copy(showPocketPicker = false) }
         }
     }
 
-    fun renamePocket(pocketId: String, name: String) {
+    fun updatePocket(pocketId: String, name: String, purpose: String) {
         val cleanName = name.cleanPocketName()
+        val cleanPurpose = purpose.cleanPocketName()
         if (cleanName.isBlank()) {
             mutableState.update { it.copy(message = "Pocket name cannot be blank.") }
             return
@@ -281,10 +295,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             mutableState.update { it.copy(message = "You already have a pocket with that name.") }
             return
         }
+        if (cleanPurpose.isBlank()) {
+            mutableState.update { it.copy(message = "Pocket purpose cannot be blank.") }
+            return
+        }
+        if (cleanPurpose.length > MAX_POCKET_PURPOSE_LENGTH) {
+            mutableState.update { it.copy(message = "Pocket purpose must be $MAX_POCKET_PURPOSE_LENGTH characters or less.") }
+            return
+        }
 
         runLoading {
-            repository.renamePocket(pocketId, cleanName)
-            mutableState.update { it.copy(message = "Pocket renamed.") }
+            repository.updatePocket(pocketId, cleanName, cleanPurpose)
+            mutableState.update { it.copy(message = "Pocket updated.") }
         }
     }
 
@@ -491,9 +513,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun setDarkModeEnabled(enabled: Boolean) {
+    fun setReminderMinute(minute: Int) {
         viewModelScope.launch {
-            settingsStore.setDarkModeEnabled(enabled)
+            settingsStore.setReminderMinute(minute)
+        }
+    }
+
+    fun setThemeMode(mode: ThemeMode) {
+        viewModelScope.launch {
+            settingsStore.setThemeMode(mode)
         }
     }
 
@@ -721,7 +749,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 "Firestore is offline. Check the emulator internet connection, then try again."
             }
             this is FirebaseFirestoreException && code == FirebaseFirestoreException.Code.PERMISSION_DENIED -> {
-                "Firestore rules are not published yet. Open Firebase Console, create Firestore, then publish firestore.rules."
+                "You do not have permission for this pocket. Check your account or Firestore rules."
             }
             else -> message ?: "Something went wrong. Try again."
         }
@@ -769,10 +797,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun cacheBootSettings(appSettings: AppSettings) {
         getApplication<Application>()
-            .getSharedPreferences("settings_boot_cache", 0)
+            .getSharedPreferences(ReminderScheduler.SETTINGS_BOOT_CACHE, 0)
             .edit()
-            .putBoolean("reminders_enabled", appSettings.remindersEnabled)
-            .putInt("reminder_hour", appSettings.reminderHour)
+            .putBoolean(ReminderScheduler.KEY_REMINDERS_ENABLED, appSettings.remindersEnabled)
+            .putInt(ReminderScheduler.KEY_REMINDER_HOUR, appSettings.reminderHour)
+            .putInt(ReminderScheduler.KEY_REMINDER_MINUTE, appSettings.reminderMinute)
             .apply()
     }
 
@@ -780,6 +809,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val FIREBASE_ACTION_TIMEOUT_MILLIS = 15_000L
         const val MAX_DISPLAY_NAME_LENGTH = 80
         const val MAX_POCKET_NAME_LENGTH = 40
+        const val MAX_POCKET_PURPOSE_LENGTH = 140
         const val MIN_PASSWORD_LENGTH = 8
     }
 }

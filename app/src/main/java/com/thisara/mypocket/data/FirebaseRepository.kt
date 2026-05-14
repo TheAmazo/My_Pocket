@@ -4,7 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
 import com.google.firebase.auth.EmailAuthProvider
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
@@ -78,8 +80,12 @@ class FirebaseRepository(private val context: Context) {
     }
 
     suspend fun signInWithGoogle(data: Intent?) {
-        val account = GoogleSignIn.getSignedInAccountFromIntent(data).await()
-        val credential = GoogleAuthProvider.getCredential(account.idToken, null)
+        val account = googleAccountFromIntent(data)
+        val credential = GoogleAuthProvider.getCredential(
+            account.idToken
+                ?: throw IllegalStateException("Google sign-in did not return an ID token. Recheck Firebase Google sign-in setup."),
+            null,
+        )
         val result = auth.signInWithCredential(credential).await()
         val user = requireNotNull(result.user)
         runCatching {
@@ -173,8 +179,12 @@ class FirebaseRepository(private val context: Context) {
     }
 
     suspend fun reauthenticateWithGoogle(data: Intent?) {
-        val account = GoogleSignIn.getSignedInAccountFromIntent(data).await()
-        val credential = GoogleAuthProvider.getCredential(account.idToken, null)
+        val account = googleAccountFromIntent(data)
+        val credential = GoogleAuthProvider.getCredential(
+            account.idToken
+                ?: throw IllegalStateException("Google sign-in did not return an ID token. Recheck Firebase Google sign-in setup."),
+            null,
+        )
         requireNotNull(auth.currentUser).reauthenticate(credential).await()
     }
 
@@ -333,17 +343,19 @@ class FirebaseRepository(private val context: Context) {
             }
     }
 
-    suspend fun createPocket(pocketName: String): String {
+    suspend fun createPocket(pocketName: String, purpose: String): String {
         val user = requireNotNull(auth.currentUser)
         val pocketRef = db.collection(POCKETS).document()
         val userRef = db.collection(USERS).document(user.uid)
         val cleanName = pocketName.cleanName().ifBlank { "My Pocket" }
+        val cleanPurpose = purpose.cleanPurpose()
 
         val batch = db.batch()
         batch.set(
             pocketRef,
             mapOf(
                 "name" to cleanName,
+                "purpose" to cleanPurpose,
                 "createdBy" to user.uid,
                 "createdAt" to FieldValue.serverTimestamp(),
             ),
@@ -378,12 +390,13 @@ class FirebaseRepository(private val context: Context) {
         ensureMonthBoard(pocketId, SavingsBoardGenerator.currentMonthKey())
     }
 
-    suspend fun renamePocket(pocketId: String, name: String) {
+    suspend fun updatePocket(pocketId: String, name: String, purpose: String) {
         db.collection(POCKETS)
             .document(pocketId)
             .update(
                 mapOf(
                     "name" to name.cleanName(),
+                    "purpose" to purpose.cleanPurpose(),
                     "updatedAt" to FieldValue.serverTimestamp(),
                 ),
             )
@@ -654,6 +667,26 @@ class FirebaseRepository(private val context: Context) {
         return context.getString(id)
     }
 
+    private suspend fun googleAccountFromIntent(data: Intent?): GoogleSignInAccount {
+        return try {
+            GoogleSignIn.getSignedInAccountFromIntent(data).await()
+        } catch (error: Throwable) {
+            throw error.googleSignInUserMessage()
+        }
+    }
+
+    private fun Throwable.googleSignInUserMessage(): Throwable {
+        val apiException = this as? ApiException ?: cause as? ApiException
+        return if (apiException?.statusCode == 10) {
+            IllegalStateException(
+                "Google sign-in is not configured for this APK. Add debug/release SHA-1 and SHA-256 in Firebase, download a fresh google-services.json, then rebuild.",
+                this,
+            )
+        } else {
+            this
+        }
+    }
+
     private fun FirebaseUser.toSession(
         userDoc: DocumentSnapshot? = null,
         photoData: String? = userDoc?.getString("photoData"),
@@ -676,6 +709,7 @@ class FirebaseRepository(private val context: Context) {
         return Pocket(
             id = id,
             name = getString("name") ?: "My Pocket",
+            purpose = getString("purpose")?.cleanPurpose() ?: DEFAULT_POCKET_PURPOSE,
         )
     }
 
@@ -712,6 +746,10 @@ class FirebaseRepository(private val context: Context) {
 
     private fun String.cleanName(): String {
         return trim().replace(Regex("\\s+"), " ")
+    }
+
+    private fun String.cleanPurpose(): String {
+        return cleanName().ifBlank { DEFAULT_POCKET_PURPOSE }
     }
 
     companion object {

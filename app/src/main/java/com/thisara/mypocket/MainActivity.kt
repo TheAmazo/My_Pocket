@@ -13,6 +13,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import com.thisara.mypocket.ui.theme.resolveDarkTheme
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.thisara.mypocket.ui.MainViewModel
@@ -26,12 +27,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             val viewModel: MainViewModel = viewModel()
             val settings by viewModel.settings.collectAsStateWithLifecycle()
+            val darkTheme = resolveDarkTheme(settings.themeMode)
             val notificationPermissionLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestPermission(),
             ) {}
 
             SideEffect {
-                val systemBarStyle = if (settings.darkModeEnabled) {
+                val systemBarStyle = if (darkTheme) {
                     SystemBarStyle.dark(Color.TRANSPARENT)
                 } else {
                     SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
@@ -48,7 +50,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            MyPocketTheme(darkModeEnabled = settings.darkModeEnabled) {
+            MyPocketTheme(themeMode = settings.themeMode) {
                 MyPocketApp(viewModel = viewModel)
             }
         }
