@@ -2,10 +2,8 @@ package com.thisara.mypocket.ui
 
 import android.net.Uri
 import android.graphics.BitmapFactory
-import android.app.TimePickerDialog
 import android.text.format.DateFormat
 import android.util.Base64
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -62,6 +60,7 @@ import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PersonAdd
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
@@ -177,10 +176,6 @@ fun MyPocketApp(viewModel: MainViewModel) {
         ActivityResultContracts.PickVisualMedia(),
     ) { uri: Uri? ->
         pendingAvatarUri = uri
-    }
-
-    BackHandler(enabled = state.canHandleSystemBack) {
-        viewModel.handleSystemBack()
     }
 
     LaunchedEffect(state.message) {
@@ -1285,15 +1280,21 @@ private fun BoardScreen(
 
 @Composable
 private fun TodayBanner(todayKey: String) {
+    val style = PocketTheme.colors
     GlassSurface(
         shadowElevation = 12.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(
+        Row(
             modifier = Modifier.padding(18.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Today", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(todayKey, fontWeight = FontWeight.Black)
+            Column {
+                Text("Today", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(todayKey, fontWeight = FontWeight.Black)
+            }
+            StatusDot(PocketYellow)
         }
     }
 }
@@ -2207,23 +2208,6 @@ private fun SettingsScreen(
     onReminderMinute: (Int) -> Unit,
     onThemeMode: (ThemeMode) -> Unit,
 ) {
-    val context = LocalContext.current
-    val reminderTime = "${settings.reminderHour.toString().padStart(2, '0')}:${
-        settings.reminderMinute.toString().padStart(2, '0')
-    }"
-    fun showReminderTimePicker() {
-        TimePickerDialog(
-            context,
-            { _, hourOfDay, minute ->
-                onReminderHour(hourOfDay)
-                onReminderMinute(minute)
-            },
-            settings.reminderHour,
-            settings.reminderMinute,
-            DateFormat.is24HourFormat(context),
-        ).show()
-    }
-
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val sidePadding = adaptiveSidePadding(maxWidth)
 
@@ -2303,26 +2287,40 @@ private fun SettingsScreen(
                             Switch(checked = settings.remindersEnabled, onCheckedChange = onReminderEnabled)
                         }
                         HorizontalDivider()
-                        Surface(
-                            color = PocketTheme.colors.glassStrong,
-                            shape = GlassCompactShape,
-                            border = BorderStroke(1.dp, PocketTheme.colors.glassStroke),
-                            tonalElevation = 0.dp,
-                            shadowElevation = 6.dp,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable(onClick = ::showReminderTimePicker),
+                        Row(
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Row(
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(16.dp),
-                            ) {
-                                Column {
-                                    Text("Reminder time", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text(reminderTime, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+                            Text("Reminder time")
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { onReminderHour(settings.reminderHour - 1) }) {
+                                    Icon(Icons.Rounded.Remove, contentDescription = "Earlier")
                                 }
-                                Icon(Icons.Rounded.Edit, contentDescription = "Change reminder time", tint = PocketBlue)
+                                Text(
+                                    "${settings.reminderHour.toString().padStart(2, '0')}:${
+                                        settings.reminderMinute.toString().padStart(2, '0')
+                                    }",
+                                )
+                                IconButton(onClick = { onReminderHour(settings.reminderHour + 1) }) {
+                                    Icon(Icons.Rounded.Add, contentDescription = "Later")
+                                }
+                            }
+                        }
+                        Row(
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Reminder minutes")
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { onReminderMinute(settings.reminderMinute - 1) }) {
+                                    Icon(Icons.Rounded.Remove, contentDescription = "Less minutes")
+                                }
+                                Text(settings.reminderMinute.toString().padStart(2, '0'))
+                                IconButton(onClick = { onReminderMinute(settings.reminderMinute + 1) }) {
+                                    Icon(Icons.Rounded.Add, contentDescription = "More minutes")
+                                }
                             }
                         }
                     }

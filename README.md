@@ -48,35 +48,32 @@ Black glass UI • Clean monthly targets • Firebase sync • Smart reminders
 
 <br><br>
 
-<a href="https://github.com/TheAmazo/My_Pocket/releases/download/v3.0.1/MyPocket-v3.0.1-debug.apk">
-  <img src="https://img.shields.io/badge/Download%20APK-v3.0.1-F45B26?style=for-the-badge&logo=android&logoColor=white" alt="Download My Pocket v3.0.1 APK" />
+<a href="https://github.com/TheAmazo/My_Pocket/releases/download/v3.0.0/MyPocket-v3.0.0-debug.apk">
+  <img src="https://img.shields.io/badge/Download%20APK-v3.0.0-F45B26?style=for-the-badge&logo=android&logoColor=white" alt="Download My Pocket v3.0.0 APK" />
 </a>
 
 </div>
 
-### Version 3.0.1 APK
+### Version 3 APK
 
 The version 3 GitHub release includes a test-installable APK:
 
 ```text
-MyPocket-v3.0.1-debug.apk
+MyPocket-v3.0.0-debug.apk
 ```
 
-Download it from [My Pocket v3.0.1](https://github.com/TheAmazo/My_Pocket/releases/tag/v3.0.1).
+Download it from [My Pocket v3.0.0](https://github.com/TheAmazo/My_Pocket/releases/tag/v3.0.0).
 
 SHA-256:
 
 ```text
-97709846449e30e798a6e86bdfa85b20b9c5c32960870d4496842a5c2d8e375f
+8bd1d757406fc29c052704efb36b07e1e7120518ed7ed53f9a1e3b9107241f42
 ```
 
 This APK is debug-signed for version 3 testing. A production APK should be signed with a private release keystore that stays outside Git.
 
-### What Is New In v3.0.1
+### What Is New In v3
 
-- Open savings cards now get fresh lower-biased random values once per day, while saved and locked history stays unchanged.
-- Android system back now follows in-app navigation on supported screens.
-- Reminder time now opens a clock picker and requests notification permission when needed.
 - A refined iOS-inspired black glass dark theme with white-blend glass cards.
 - A unified wallet logo across launcher, onboarding, pocket picker, and README.
 - Pocket creation now captures both pocket name and purpose.
@@ -145,7 +142,7 @@ My Pocket replaces manual savings sheets with a focused Android app. Each pocket
 
 ### Savings Board
 
-- 30 monthly cells with daily open-card values from `20`, `50`, `100`, `500`, and `1000`
+- 30 random monthly cells with `20`, `50`, `100`, `500`, and `1000`
 - Multiple cells can be saved on the same day
 - Open cells stay at the top so saving feels natural
 - Saved cells from previous days lock and move below open cells
