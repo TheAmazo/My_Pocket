@@ -112,6 +112,15 @@ data class MainUiState(
             yearSummaries.firstOrNull { it.monthKey == monthKey }
         }
     }
+
+    val canHandleSystemBack: Boolean
+        get() = when {
+            !isSignedIn -> authMode != AuthMode.Landing
+            showPocketPicker && !needsPocket -> true
+            selectedSummaryMonthKey != null -> true
+            selectedTab != HomeTab.Board -> true
+            else -> false
+        }
 }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -174,6 +183,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun showPocketPicker() {
         mutableState.update { it.copy(showPocketPicker = true, selectedTab = HomeTab.Board) }
+    }
+
+    fun handleSystemBack() {
+        val state = mutableState.value
+        when {
+            !state.isSignedIn && state.authMode != AuthMode.Landing -> {
+                mutableState.update { it.copy(authMode = AuthMode.Landing, message = null) }
+            }
+
+            state.showPocketPicker && !state.needsPocket -> {
+                mutableState.update { it.copy(showPocketPicker = false) }
+            }
+
+            state.selectedSummaryMonthKey != null -> {
+                closeSummaryMonth()
+            }
+
+            state.selectedTab != HomeTab.Board -> {
+                mutableState.update { it.copy(selectedTab = HomeTab.Board) }
+            }
+        }
     }
 
     fun signUp(name: String, email: String, password: String, confirmPassword: String) {

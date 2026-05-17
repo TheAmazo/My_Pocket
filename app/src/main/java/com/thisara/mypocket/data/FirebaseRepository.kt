@@ -444,60 +444,113 @@ class FirebaseRepository(private val context: Context) {
             .filter { it.getBoolean("saved") == true }
             .all { it.contains("savedDayKey") }
 
-        if (monthExists && hasBaseCells && hasSavedDayFields) {
-            syncMonthSummary(pocketId, monthKey)
+        if (!monthExists || !hasBaseCells || !hasSavedDayFields) {
+            val amounts = SavingsBoardGenerator.generate(monthKey, pocketId)
+            val batch = db.batch()
+            batch.set(
+                monthRef,
+                mapOf(
+                    "monthKey" to monthKey,
+                    "year" to YearMonth.parse(monthKey).year,
+                    "cellCount" to amounts.size,
+                    "targetTotal" to amounts.sum(),
+                    "savedTotal" to cellsSnapshot.documents
+                        .mapNotNull { it.toSavingsCell() }
+                        .filter { it.saved }
+                        .sumOf { it.amount },
+                    "createdAt" to FieldValue.serverTimestamp(),
+                ),
+                SetOptions.merge(),
+            )
+            amounts.forEachIndexed { index, amount ->
+                val cellId = index.toString().padStart(2, '0')
+                val existing = cellsSnapshot.documents.firstOrNull { it.id == cellId }
+                val cellData = if (existing == null) {
+                    mapOf(
+                        "index" to index,
+                        "amount" to amount,
+                        "saved" to false,
+                        "savedByUid" to null,
+                        "savedByName" to null,
+                        "savedAtMillis" to null,
+                        "savedDayKey" to null,
+                        "round" to 0,
+                    )
+                } else {
+                    buildMap {
+                        put("index", index)
+                        put("amount", existing.getLong("amount")?.toInt() ?: amount)
+                        put("round", existing.getLong("round")?.toInt() ?: 0)
+                        if (!existing.contains("savedDayKey")) {
+                            put("savedDayKey", null)
+                        }
+                    }
+                }
+                batch.set(
+                    monthRef.collection(CELLS).document(cellId),
+                    cellData,
+                    SetOptions.merge(),
+                )
+            }
+            batch.commit().await()
+        }
+
+        refreshOpenAmountsForToday(pocketId, monthKey, monthRef)
+        syncMonthSummary(pocketId, monthKey)
+    }
+
+    private suspend fun refreshOpenAmountsForToday(
+        pocketId: String,
+        monthKey: String,
+        monthRef: DocumentReference,
+    ) {
+        val todayKey = SavingsBoardGenerator.todayKey()
+        if (monthKey != SavingsBoardGenerator.currentMonthKey()) return
+
+        val monthSnapshot = monthRef.get().await()
+        if (monthSnapshot.getString("openAmountsDayKey") == todayKey) return
+
+        val cellDocuments = monthRef.collection(CELLS).get().await().documents
+        val cells = cellDocuments.mapNotNull { it.toSavingsCell() }
+        val dailyAmounts = SavingsBoardGenerator.dailyOpenAmountsForOpenCells(
+            cells = cells,
+            monthKey = monthKey,
+            pocketId = pocketId,
+            dayKey = todayKey,
+        )
+        val documentsById = cellDocuments.associateBy { it.id }
+
+        val dailyEntries = dailyAmounts.entries.toList()
+        if (dailyEntries.isEmpty()) {
+            monthRef.set(
+                mapOf(
+                    "openAmountsDayKey" to todayKey,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                ),
+                SetOptions.merge(),
+            ).await()
             return
         }
 
-        val amounts = SavingsBoardGenerator.generate(monthKey, pocketId)
-        val batch = db.batch()
-        batch.set(
-            monthRef,
-            mapOf(
-                "monthKey" to monthKey,
-                "year" to YearMonth.parse(monthKey).year,
-                "cellCount" to amounts.size,
-                "targetTotal" to amounts.sum(),
-                "savedTotal" to cellsSnapshot.documents
-                    .mapNotNull { it.toSavingsCell() }
-                    .filter { it.saved }
-                    .sumOf { it.amount },
-                "createdAt" to FieldValue.serverTimestamp(),
-            ),
-            SetOptions.merge(),
-        )
-        amounts.forEachIndexed { index, amount ->
-            val cellId = index.toString().padStart(2, '0')
-            val existing = cellsSnapshot.documents.firstOrNull { it.id == cellId }
-            val cellData = if (existing == null) {
-                mapOf(
-                    "index" to index,
-                    "amount" to amount,
-                    "saved" to false,
-                    "savedByUid" to null,
-                    "savedByName" to null,
-                    "savedAtMillis" to null,
-                    "savedDayKey" to null,
-                    "round" to 0,
-                )
-            } else {
-                buildMap {
-                    put("index", index)
-                    put("amount", existing.getLong("amount")?.toInt() ?: amount)
-                    put("round", existing.getLong("round")?.toInt() ?: 0)
-                    if (!existing.contains("savedDayKey")) {
-                        put("savedDayKey", null)
-                    }
+        dailyEntries.chunked(MAX_BATCH_WRITES - 1).forEachIndexed { chunkIndex, chunk ->
+            val batch = db.batch()
+            chunk.forEach { (cellId, amount) ->
+                documentsById[cellId]?.reference?.let { cellRef ->
+                    batch.update(cellRef, "amount", amount)
                 }
             }
-            batch.set(
-                monthRef.collection(CELLS).document(cellId),
-                cellData,
-                SetOptions.merge(),
-            )
+            if (chunkIndex == dailyEntries.lastIndex / (MAX_BATCH_WRITES - 1)) {
+                batch.set(
+                    monthRef,
+                    mapOf(
+                        "openAmountsDayKey" to todayKey,
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    ),
+                    SetOptions.merge(),
+                )
+            }
+            batch.commit().await()
         }
-        batch.commit().await()
-        syncMonthSummary(pocketId, monthKey)
     }
 
     suspend fun toggleCell(pocketId: String, monthKey: String, cell: SavingsCell): Boolean {
@@ -552,7 +605,16 @@ class FirebaseRepository(private val context: Context) {
 
         val nextRound = (cells.size / SavingsBoardGenerator.DEFAULT_CELL_COUNT)
         val startIndex = (cells.maxOfOrNull { it.index } ?: -1) + 1
-        val amounts = SavingsBoardGenerator.generate(monthKey, pocketId, round = nextRound)
+        val todayKey = SavingsBoardGenerator.todayKey()
+        val amounts = List(SavingsBoardGenerator.DEFAULT_CELL_COUNT) { offset ->
+            SavingsBoardGenerator.dailyOpenAmount(
+                monthKey = monthKey,
+                pocketId = pocketId,
+                dayKey = todayKey,
+                cellIndex = startIndex + offset,
+                round = nextRound,
+            )
+        }
         val batch = db.batch()
         amounts.forEachIndexed { offset, amount ->
             val index = startIndex + offset
@@ -757,5 +819,6 @@ class FirebaseRepository(private val context: Context) {
         private const val POCKETS = "pockets"
         private const val MONTHS = "months"
         private const val CELLS = "cells"
+        private const val MAX_BATCH_WRITES = 500
     }
 }

@@ -1,6 +1,7 @@
 package com.thisara.mypocket.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -35,5 +36,66 @@ class SavingsBoardGeneratorTest {
         val june = SavingsBoardGenerator.generate("2026-06", "pocket-a")
 
         assertTrue(may != june)
+    }
+
+    @Test
+    fun dailyOpenAmountIsStableForSameDay() {
+        val first = SavingsBoardGenerator.dailyOpenAmount(
+            monthKey = "2026-05",
+            pocketId = "pocket-a",
+            dayKey = "2026-05-17",
+            cellIndex = 4,
+        )
+        val second = SavingsBoardGenerator.dailyOpenAmount(
+            monthKey = "2026-05",
+            pocketId = "pocket-a",
+            dayKey = "2026-05-17",
+            cellIndex = 4,
+        )
+
+        assertEquals(first, second)
+    }
+
+    @Test
+    fun dailyOpenAmountsChangeWhenDayChanges() {
+        val today = List(30) { index ->
+            SavingsBoardGenerator.dailyOpenAmount("2026-05", "pocket-a", "2026-05-17", index)
+        }
+        val tomorrow = List(30) { index ->
+            SavingsBoardGenerator.dailyOpenAmount("2026-05", "pocket-a", "2026-05-18", index)
+        }
+
+        assertTrue(today != tomorrow)
+    }
+
+    @Test
+    fun dailyOpenAmountsAreAllowedAmounts() {
+        val amounts = List(60) { index ->
+            SavingsBoardGenerator.dailyOpenAmount("2026-05", "pocket-a", "2026-05-17", index)
+        }
+
+        assertTrue(amounts.all { it in SavingsBoardGenerator.allowedAmounts })
+    }
+
+    @Test
+    fun dailyOpenAmountsExcludeSavedCells() {
+        val cells = listOf(
+            SavingsCell(id = "00", index = 0, amount = 500, saved = true),
+            SavingsCell(id = "01", index = 1, amount = 1000, saved = false),
+            SavingsCell(id = "02", index = 2, amount = 100, saved = true),
+            SavingsCell(id = "03", index = 3, amount = 50, saved = false),
+        )
+
+        val dailyAmounts = SavingsBoardGenerator.dailyOpenAmountsForOpenCells(
+            cells = cells,
+            monthKey = "2026-05",
+            pocketId = "pocket-a",
+            dayKey = "2026-05-17",
+        )
+
+        assertFalse(dailyAmounts.containsKey("00"))
+        assertTrue(dailyAmounts.containsKey("01"))
+        assertFalse(dailyAmounts.containsKey("02"))
+        assertTrue(dailyAmounts.containsKey("03"))
     }
 }
