@@ -81,6 +81,6 @@ No Firebase Storage setup is required.
 - **Android Studio says there is no Gradle build:** open `/Users/thisara/Desktop/My_Pocket`, not a moved or Expo folder.
 - **Google sign-in shows status code 10:** add debug/release SHA-1 and SHA-256 fingerprints in Firebase, download a fresh `google-services.json`, replace the local file, then rebuild.
 - **Google sign-in says it is not ready:** confirm `app/google-services.json` exists and came from the Firebase Android app for `com.thisara.mypocket`.
-- **Firestore permission denied:** publish the latest `firestore.rules` in Firebase Console. The current pocket rules require `name`, `purpose`, `createdBy`, and `createdAt` on new pocket documents.
+- **Firestore permission denied:** publish the latest `firestore.rules` in Firebase Console. The current rules include pocket purposes and the daily open-card shuffle field.
 - **Avatar save fails:** publish `firestore.rules`; Firebase Storage is not used.
 - **GitHub Desktop shows too many files:** confirm `.gitignore` is present at the repo root.

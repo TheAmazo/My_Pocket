@@ -89,6 +89,7 @@ service cloud.firestore {
           'targetTotal',
           'savedCount',
           'savedTotal',
+          'openAmountsDayKey',
           'createdAt',
           'updatedAt'
         ])
@@ -100,6 +101,7 @@ service cloud.firestore {
         && data.targetTotal is int
         && data.targetTotal >= 0
         && data.targetTotal <= 720000
+        && optionalString(data, 'openAmountsDayKey', 10)
         && (!hasField(data, 'savedCount')
           || (data.savedCount is int && data.savedCount >= 0 && data.savedCount <= data.cellCount))
         && (!hasField(data, 'savedTotal')

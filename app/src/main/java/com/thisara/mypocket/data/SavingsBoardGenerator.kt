@@ -16,6 +16,14 @@ object SavingsBoardGenerator {
         1000 to 6,
     )
 
+    private val dailyOpenWeightedAmounts = listOf(
+        20 to 34,
+        50 to 30,
+        100 to 23,
+        500 to 10,
+        1000 to 3,
+    )
+
     val allowedAmounts: Set<Int> = weightedAmounts.map { it.first }.toSet()
 
     fun generate(
@@ -37,6 +45,43 @@ object SavingsBoardGenerator {
                 pick < running
             }.first
         }
+    }
+
+    fun dailyOpenAmount(
+        monthKey: String,
+        pocketId: String,
+        dayKey: String,
+        cellIndex: Int,
+        round: Int = cellIndex / DEFAULT_CELL_COUNT,
+    ): Int {
+        require(cellIndex >= 0) { "Cell index must be zero or greater." }
+
+        val totalWeight = dailyOpenWeightedAmounts.sumOf { it.second }
+        val random = Random("$monthKey:$pocketId:$dayKey:$round:$cellIndex".hashCode())
+        val pick = random.nextInt(totalWeight)
+        var running = 0
+        return dailyOpenWeightedAmounts.first { (_, weight) ->
+            running += weight
+            pick < running
+        }.first
+    }
+
+    fun dailyOpenAmountsForOpenCells(
+        cells: List<SavingsCell>,
+        monthKey: String,
+        pocketId: String,
+        dayKey: String,
+    ): Map<String, Int> {
+        return cells
+            .filterNot { it.saved }
+            .associate { cell ->
+                cell.id to dailyOpenAmount(
+                    monthKey = monthKey,
+                    pocketId = pocketId,
+                    dayKey = dayKey,
+                    cellIndex = cell.index,
+                )
+            }
     }
 
     fun currentMonthKey(zoneId: ZoneId = ZoneId.systemDefault()): String {
