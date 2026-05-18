@@ -2,8 +2,10 @@ package com.thisara.mypocket.ui
 
 import android.net.Uri
 import android.graphics.BitmapFactory
+import android.app.TimePickerDialog
 import android.text.format.DateFormat
 import android.util.Base64
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -60,17 +62,13 @@ import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PersonAdd
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ElevatedButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -135,6 +133,7 @@ import com.thisara.mypocket.data.MonthBoard
 import com.thisara.mypocket.data.MonthSummary
 import com.thisara.mypocket.data.Pocket
 import com.thisara.mypocket.data.SavingsCell
+import com.thisara.mypocket.data.TargetScope
 import com.thisara.mypocket.data.ThemeMode
 import com.thisara.mypocket.data.canToggle
 import com.thisara.mypocket.data.isLocked
@@ -176,6 +175,10 @@ fun MyPocketApp(viewModel: MainViewModel) {
         ActivityResultContracts.PickVisualMedia(),
     ) { uri: Uri? ->
         pendingAvatarUri = uri
+    }
+
+    BackHandler(enabled = state.canHandleSystemBack) {
+        viewModel.handleSystemBack()
     }
 
     LaunchedEffect(state.message) {
@@ -406,7 +409,7 @@ private fun AppIconMark(size: Dp) {
         contentAlignment = Alignment.Center,
     ) {
         Image(
-            painter = painterResource(id = R.drawable.ic_launcher_foreground),
+            painter = painterResource(id = R.drawable.app_logo_savings),
             contentDescription = "My Pocket",
             modifier = Modifier.fillMaxSize(),
         )
@@ -595,8 +598,8 @@ private fun PocketSelectorScreen(
     pockets: List<Pocket>,
     currentPocketId: String?,
     onSelect: (String) -> Unit,
-    onCreate: (String, String) -> Unit,
-    onUpdate: (String, String, String) -> Unit,
+    onCreate: (String, String, String, TargetScope) -> Unit,
+    onUpdate: (String, String, String, String, TargetScope) -> Unit,
     onDelete: (String) -> Unit,
     onSignOut: () -> Unit,
 ) {
@@ -604,9 +607,13 @@ private fun PocketSelectorScreen(
     var showCreateDialog by remember { mutableStateOf(false) }
     var createName by remember { mutableStateOf("") }
     var createPurpose by remember { mutableStateOf("") }
+    var createTargetAmount by remember { mutableStateOf("") }
+    var createTargetScope by remember { mutableStateOf(TargetScope.MONTHLY) }
     var renameTarget by remember { mutableStateOf<Pocket?>(null) }
     var renameName by remember { mutableStateOf("") }
     var renamePurpose by remember { mutableStateOf("") }
+    var renameTargetAmount by remember { mutableStateOf("") }
+    var renameTargetScope by remember { mutableStateOf(TargetScope.MONTHLY) }
     var deleteTarget by remember { mutableStateOf<Pocket?>(null) }
     var deleteConfirmation by remember { mutableStateOf("") }
 
@@ -634,7 +641,7 @@ private fun PocketSelectorScreen(
                             if (pocket.id == currentPocketId) style.glassStrokeStrong else style.glassStroke,
                         ),
                         tonalElevation = 0.dp,
-                        shadowElevation = 14.dp,
+                        shadowElevation = 0.dp,
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { onSelect(pocket.id) },
@@ -652,12 +659,21 @@ private fun PocketSelectorScreen(
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis,
                                 )
+                                Text(
+                                    pocket.targetLabel(),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                             }
                             IconButton(
                                 onClick = {
                                     renameTarget = pocket
                                     renameName = pocket.name
                                     renamePurpose = pocket.purpose
+                                    renameTargetAmount = pocket.targetAmount?.toString().orEmpty()
+                                    renameTargetScope = pocket.targetScope
                                 },
                             ) {
                                 Icon(Icons.Rounded.Edit, contentDescription = "Edit pocket", tint = PocketBlue)
@@ -726,15 +742,35 @@ private fun PocketSelectorScreen(
                         minLines = 2,
                         maxLines = 3,
                     )
+                    OutlinedTextField(
+                        value = createTargetAmount,
+                        onValueChange = { value ->
+                            createTargetAmount = value.filter { it.isDigit() }.take(6)
+                        },
+                        label = { Text("Target amount") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        supportingText = {
+                            Text("Optional. Leave empty for a flexible savings board.")
+                        },
+                    )
+                    TargetScopePicker(
+                        selected = createTargetScope,
+                        onSelected = { createTargetScope = it },
+                        enabled = createTargetAmount.isNotBlank(),
+                    )
                 }
             },
             confirmButton = {
                 Button(
                     enabled = createName.isNotBlank() && createPurpose.isNotBlank(),
                     onClick = {
-                        onCreate(createName, createPurpose)
+                        onCreate(createName, createPurpose, createTargetAmount, createTargetScope)
                         createName = ""
                         createPurpose = ""
+                        createTargetAmount = ""
+                        createTargetScope = TargetScope.MONTHLY
                         showCreateDialog = false
                     },
                 ) {
@@ -776,13 +812,31 @@ private fun PocketSelectorScreen(
                             if (renamePurpose.isBlank()) Text("Purpose cannot be blank.")
                         },
                     )
+                    OutlinedTextField(
+                        value = renameTargetAmount,
+                        onValueChange = { value ->
+                            renameTargetAmount = value.filter { it.isDigit() }.take(6)
+                        },
+                        label = { Text("Target amount") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        supportingText = {
+                            Text("Optional. Clear it to use a flexible board.")
+                        },
+                    )
+                    TargetScopePicker(
+                        selected = renameTargetScope,
+                        onSelected = { renameTargetScope = it },
+                        enabled = renameTargetAmount.isNotBlank(),
+                    )
                 }
             },
             confirmButton = {
                 Button(
                     enabled = renameName.isNotBlank() && renamePurpose.isNotBlank(),
                     onClick = {
-                        onUpdate(pocket.id, renameName, renamePurpose)
+                        onUpdate(pocket.id, renameName, renamePurpose, renameTargetAmount, renameTargetScope)
                         renameTarget = null
                     },
                 ) {
@@ -837,6 +891,37 @@ private fun PocketSelectorScreen(
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun TargetScopePicker(
+    selected: TargetScope,
+    onSelected: (TargetScope) -> Unit,
+    enabled: Boolean,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            "Target type",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            FilterChip(
+                selected = selected == TargetScope.MONTHLY,
+                onClick = { onSelected(TargetScope.MONTHLY) },
+                enabled = enabled,
+                label = { Text("Monthly", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                modifier = Modifier.weight(1f),
+            )
+            FilterChip(
+                selected = selected == TargetScope.LIFETIME,
+                onClick = { onSelected(TargetScope.LIFETIME) },
+                enabled = enabled,
+                label = { Text("Lifetime", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 
@@ -1105,8 +1190,10 @@ private fun HomeTabContent(
 ) {
     when (state.selectedTab) {
         HomeTab.Board -> BoardScreen(
+            pocket = state.pocket,
             board = state.board,
             todayKey = state.todayKey,
+            lifetimeSavedTotal = state.lifetimeSavedTotal,
             onToggleCell = onToggleCell,
             onRepairBoard = onRepairBoard,
         )
@@ -1141,6 +1228,15 @@ private fun HomeTab.label(): String {
     return if (this == HomeTab.History) "Summary" else name
 }
 
+private fun Pocket.targetLabel(): String {
+    val amount = targetAmount ?: return "Flexible target"
+    val scope = when (targetScope) {
+        TargetScope.MONTHLY -> "Monthly"
+        TargetScope.LIFETIME -> "Lifetime"
+    }
+    return "$scope target: Rs. $amount"
+}
+
 private fun HomeTab.icon() = when (this) {
     HomeTab.Board -> Icons.Rounded.Home
     HomeTab.History -> Icons.Rounded.History
@@ -1150,8 +1246,10 @@ private fun HomeTab.icon() = when (this) {
 
 @Composable
 private fun BoardScreen(
+    pocket: Pocket?,
     board: MonthBoard?,
     todayKey: String,
+    lifetimeSavedTotal: Int,
     onToggleCell: (SavingsCell) -> Unit,
     onRepairBoard: () -> Unit,
 ) {
@@ -1232,13 +1330,6 @@ private fun BoardScreen(
         )
     }
     val gridState = rememberLazyGridState()
-    val orderSignature = remember(sortedCells, todayKey) {
-        sortedCells.joinToString(separator = "|") { "${it.id}:${it.sortRank(todayKey)}" }
-    }
-
-    LaunchedEffect(orderSignature) {
-        gridState.scrollToItem(0)
-    }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val compact = maxWidth < 360.dp
@@ -1262,9 +1353,13 @@ private fun BoardScreen(
                 TodayBanner(todayKey)
             }
             item(span = { GridItemSpan(maxLineSpan) }) {
-                BoardSummary(board)
+                BoardSummary(
+                    pocket = pocket,
+                    board = board,
+                    lifetimeSavedTotal = lifetimeSavedTotal,
+                )
             }
-            items(sortedCells, key = { "${it.sortRank(todayKey)}-${it.id}" }) { cell ->
+            items(sortedCells, key = { it.id }) { cell ->
                 SavingsCellTile(
                     cell = cell,
                     todayKey = todayKey,
@@ -1280,35 +1375,51 @@ private fun BoardScreen(
 
 @Composable
 private fun TodayBanner(todayKey: String) {
-    val style = PocketTheme.colors
     GlassSurface(
-        shadowElevation = 12.dp,
+        shadowElevation = 0.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(
+        Column(
             modifier = Modifier.padding(18.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column {
-                Text("Today", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(todayKey, fontWeight = FontWeight.Black)
-            }
-            StatusDot(PocketYellow)
+            Text("Today", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(todayKey, fontWeight = FontWeight.Black)
         }
     }
 }
 
 @Composable
-private fun BoardSummary(board: MonthBoard) {
+private fun BoardSummary(
+    pocket: Pocket?,
+    board: MonthBoard,
+    lifetimeSavedTotal: Int,
+) {
     val style = PocketTheme.colors
-    val progress = if (board.targetTotal == 0) 0f else board.savedTotal.toFloat() / board.targetTotal
+    val targetAmount = pocket?.targetAmount
+    val targetScope = pocket?.targetScope ?: TargetScope.MONTHLY
+    val targetTotal = when {
+        targetAmount == null -> board.targetTotal
+        targetScope == TargetScope.MONTHLY -> maxOf(targetAmount, board.savedTotal)
+        else -> maxOf(targetAmount, lifetimeSavedTotal)
+    }
+    val savedTotal = if (targetAmount != null && targetScope == TargetScope.LIFETIME) {
+        lifetimeSavedTotal
+    } else {
+        board.savedTotal
+    }
+    val remainingTotal = (targetTotal - savedTotal).coerceAtLeast(0)
+    val progress = if (targetTotal == 0) 0f else savedTotal.toFloat() / targetTotal
+    val targetLabel = when {
+        targetAmount == null -> "${board.monthKey} flexible board: Rs. ${board.targetTotal}"
+        targetScope == TargetScope.MONTHLY -> "${board.monthKey} monthly target: Rs. $targetAmount"
+        else -> "Lifetime target: Rs. $targetAmount"
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         SummaryMetricRow(
             metrics = listOf(
-                SummaryMetric("Saved", "Rs. ${board.savedTotal}", PocketBlue),
-                SummaryMetric("Remaining", "Rs. ${board.remainingTotal}", PocketRose),
+                SummaryMetric("Saved", "Rs. $savedTotal", PocketBlue),
+                SummaryMetric("Remaining", "Rs. $remainingTotal", PocketRose),
                 SummaryMetric("Cells", "${board.savedCount}/${board.cells.size}", PocketOrange),
             ),
         )
@@ -1322,7 +1433,7 @@ private fun BoardSummary(board: MonthBoard) {
             trackColor = style.progressTrack,
         )
         Text(
-            text = "${board.monthKey} target: Rs. ${board.targetTotal}",
+            text = targetLabel,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium,
         )
@@ -1368,7 +1479,7 @@ private fun SummaryMetricRow(metrics: List<SummaryMetric>, modifier: Modifier = 
 private fun SummaryTile(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
     GlassSurface(
         shape = GlassCompactShape,
-        shadowElevation = 12.dp,
+        shadowElevation = 0.dp,
         modifier = modifier,
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1411,9 +1522,10 @@ private fun SavingsCellTile(cell: SavingsCell, todayKey: String, onClick: () -> 
             if (cell.saved) style.glassStrokeStrong else style.glassStroke.copy(alpha = if (locked) 0.42f else 0.9f),
         ),
         tonalElevation = 0.dp,
-        shadowElevation = if (cell.saved) 14.dp else 10.dp,
+        shadowElevation = 0.dp,
         modifier = Modifier
             .aspectRatio(1.05f)
+            .clip(GlassCompactShape)
             .clickable(enabled = canClick, onClick = onClick),
     ) {
         Column(
@@ -1563,7 +1675,7 @@ private fun YearlySavedCard(year: Int, savedTotal: Int) {
     val style = PocketTheme.colors
     GlassSurface(
         borderColor = style.glassStrokeStrong,
-        shadowElevation = 16.dp,
+        shadowElevation = 0.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
@@ -1605,7 +1717,7 @@ private fun MonthCard(
     val progress = if (cellCount == 0) 0f else savedCount.toFloat() / cellCount.toFloat()
 
     GlassSurface(
-        shadowElevation = 14.dp,
+        shadowElevation = 0.dp,
         modifier = modifier.clickable(onClick = onClick),
     ) {
         Column(
@@ -1720,7 +1832,7 @@ private fun MonthDayCard(dayKey: String, cells: List<SavingsCell>) {
     GlassSurface(
         color = if (cells.isEmpty()) style.glass else style.glassStrong,
         borderColor = if (cells.isEmpty()) style.glassStroke.copy(alpha = 0.72f) else style.glassStroke,
-        shadowElevation = 12.dp,
+        shadowElevation = 0.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
@@ -1927,7 +2039,7 @@ private fun AvatarImage(photoData: String?, size: Dp) {
         shape = CircleShape,
         border = BorderStroke(1.dp, style.glassStroke),
         tonalElevation = 0.dp,
-        shadowElevation = 12.dp,
+        shadowElevation = 0.dp,
         modifier = Modifier.size(size),
     ) {
         if (avatarBitmap != null) {
@@ -1991,7 +2103,7 @@ private fun AvatarCropDialog(
                         contentColor = MaterialTheme.colorScheme.onSurface,
                         shape = CircleShape,
                         border = BorderStroke(1.dp, style.glassStrokeStrong),
-                        shadowElevation = 16.dp,
+                        shadowElevation = 0.dp,
                         modifier = Modifier
                             .size(220.dp)
                             .align(Alignment.CenterHorizontally),
@@ -2208,6 +2320,23 @@ private fun SettingsScreen(
     onReminderMinute: (Int) -> Unit,
     onThemeMode: (ThemeMode) -> Unit,
 ) {
+    val context = LocalContext.current
+    val reminderTime = "${settings.reminderHour.toString().padStart(2, '0')}:${
+        settings.reminderMinute.toString().padStart(2, '0')
+    }"
+    fun showReminderTimePicker() {
+        TimePickerDialog(
+            context,
+            { _, hourOfDay, minute ->
+                onReminderHour(hourOfDay)
+                onReminderMinute(minute)
+            },
+            settings.reminderHour,
+            settings.reminderMinute,
+            DateFormat.is24HourFormat(context),
+        ).show()
+    }
+
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val sidePadding = adaptiveSidePadding(maxWidth)
 
@@ -2250,7 +2379,7 @@ private fun SettingsScreen(
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                             ThemeModeChip(
-                                label = "System follow",
+                                label = "System",
                                 selected = settings.themeMode == ThemeMode.SYSTEM,
                                 onClick = { onThemeMode(ThemeMode.SYSTEM) },
                                 modifier = Modifier.weight(1f),
@@ -2287,40 +2416,26 @@ private fun SettingsScreen(
                             Switch(checked = settings.remindersEnabled, onCheckedChange = onReminderEnabled)
                         }
                         HorizontalDivider()
-                        Row(
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth(),
+                        Surface(
+                            color = PocketTheme.colors.glassStrong,
+                            shape = GlassCompactShape,
+                            border = BorderStroke(1.dp, PocketTheme.colors.glassStroke),
+                            tonalElevation = 0.dp,
+                            shadowElevation = 0.dp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(onClick = ::showReminderTimePicker),
                         ) {
-                            Text("Reminder time")
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(onClick = { onReminderHour(settings.reminderHour - 1) }) {
-                                    Icon(Icons.Rounded.Remove, contentDescription = "Earlier")
+                            Row(
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(16.dp),
+                            ) {
+                                Column {
+                                    Text("Reminder time", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(reminderTime, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
                                 }
-                                Text(
-                                    "${settings.reminderHour.toString().padStart(2, '0')}:${
-                                        settings.reminderMinute.toString().padStart(2, '0')
-                                    }",
-                                )
-                                IconButton(onClick = { onReminderHour(settings.reminderHour + 1) }) {
-                                    Icon(Icons.Rounded.Add, contentDescription = "Later")
-                                }
-                            }
-                        }
-                        Row(
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text("Reminder minutes")
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(onClick = { onReminderMinute(settings.reminderMinute - 1) }) {
-                                    Icon(Icons.Rounded.Remove, contentDescription = "Less minutes")
-                                }
-                                Text(settings.reminderMinute.toString().padStart(2, '0'))
-                                IconButton(onClick = { onReminderMinute(settings.reminderMinute + 1) }) {
-                                    Icon(Icons.Rounded.Add, contentDescription = "More minutes")
-                                }
+                                Icon(Icons.Rounded.Edit, contentDescription = "Change reminder time", tint = PocketBlue)
                             }
                         }
                     }
@@ -2357,7 +2472,7 @@ private fun GlassSurface(
     shape: RoundedCornerShape = GlassCardShape,
     color: Color? = null,
     borderColor: Color? = null,
-    shadowElevation: Dp = 16.dp,
+    shadowElevation: Dp = 0.dp,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val style = PocketTheme.colors
@@ -2368,24 +2483,9 @@ private fun GlassSurface(
         border = BorderStroke(1.dp, borderColor ?: style.glassStroke),
         tonalElevation = 0.dp,
         shadowElevation = shadowElevation,
-        modifier = modifier,
+        modifier = modifier.clip(shape),
     ) {
-        Box {
-            if (style.isDark) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(
-                                    Color.White.copy(alpha = 0.14f),
-                                    Color.White.copy(alpha = 0.04f),
-                                    Color.Transparent,
-                                ),
-                            ),
-                        ),
-                )
-            }
+        Box(Modifier.clip(shape)) {
             content()
         }
     }
@@ -2406,7 +2506,7 @@ private fun EmptyState(text: String) {
     GlassSurface(
         color = style.glass,
         borderColor = style.glassStroke.copy(alpha = 0.72f),
-        shadowElevation = 10.dp,
+        shadowElevation = 0.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(

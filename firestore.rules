@@ -71,6 +71,8 @@ service cloud.firestore {
       return data.keys().hasOnly([
           'name',
           'purpose',
+          'targetAmount',
+          'targetScope',
           'createdBy',
           'createdAt',
           'updatedAt'
@@ -78,7 +80,13 @@ service cloud.firestore {
         && data.createdBy == request.auth.uid
         && validString(data, 'name', 40)
         && hasField(data, 'purpose')
-        && validString(data, 'purpose', 140);
+        && validString(data, 'purpose', 140)
+        && (!hasField(data, 'targetAmount')
+          || data.targetAmount == null
+          || (data.targetAmount is int && data.targetAmount > 0 && data.targetAmount <= 720000))
+        && (!hasField(data, 'targetScope')
+          || data.targetScope == null
+          || data.targetScope in ['MONTHLY', 'LIFETIME']);
     }
 
     function validMonthData(data, monthId) {
@@ -89,6 +97,7 @@ service cloud.firestore {
           'targetTotal',
           'savedCount',
           'savedTotal',
+          'openAmountsDayKey',
           'createdAt',
           'updatedAt'
         ])
@@ -100,10 +109,11 @@ service cloud.firestore {
         && data.targetTotal is int
         && data.targetTotal >= 0
         && data.targetTotal <= 720000
+        && optionalString(data, 'openAmountsDayKey', 10)
         && (!hasField(data, 'savedCount')
-          || (data.savedCount is int && data.savedCount >= 0 && data.savedCount <= data.cellCount))
+          || (data.savedCount is int && data.savedCount >= 0 && data.savedCount <= 720))
         && (!hasField(data, 'savedTotal')
-          || (data.savedTotal is int && data.savedTotal >= 0 && data.savedTotal <= data.targetTotal));
+          || (data.savedTotal is int && data.savedTotal >= 0 && data.savedTotal <= 720000));
     }
 
     function validCellData(data) {
@@ -128,9 +138,7 @@ service cloud.firestore {
         && optionalString(data, 'savedDayKey', 10)
         && (data.saved == false
           || data.savedByUid == request.auth.uid
-          || data.savedByUid == null)
-        && (data.saved == true
-          || (data.savedByUid == null && data.savedByName == null && data.savedAtMillis == null && data.savedDayKey == null));
+          || data.savedByUid == null);
     }
 
     match /users/{userId} {
@@ -160,6 +168,8 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'name',
           'purpose',
+          'targetAmount',
+          'targetScope',
           'updatedAt'
         ])
         && validPocketData(request.resource.data);

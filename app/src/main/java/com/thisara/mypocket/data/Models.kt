@@ -15,9 +15,17 @@ data class Pocket(
     val id: String,
     val name: String,
     val purpose: String = DEFAULT_POCKET_PURPOSE,
+    val targetAmount: Int? = null,
+    val targetScope: TargetScope = TargetScope.MONTHLY,
 )
 
 const val DEFAULT_POCKET_PURPOSE = "Personal savings pocket"
+const val MAX_POCKET_TARGET_AMOUNT = 720000
+
+enum class TargetScope {
+    MONTHLY,
+    LIFETIME,
+}
 
 data class SavingsCell(
     val id: String,
