@@ -343,22 +343,54 @@ class FirebaseRepository(private val context: Context) {
             }
     }
 
-    suspend fun createPocket(pocketName: String, purpose: String): String {
+    fun listenAllMonthSummaries(
+        pocketId: String,
+        onSummaries: (List<MonthSummary>) -> Unit,
+        onError: (Throwable) -> Unit,
+    ): ListenerRegistration {
+        return db.collection(POCKETS)
+            .document(pocketId)
+            .collection(MONTHS)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    onError(error)
+                    return@addSnapshotListener
+                }
+                onSummaries(
+                    snapshot?.documents
+                        .orEmpty()
+                        .mapNotNull { it.toMonthSummary() }
+                        .sortedByDescending { it.monthKey },
+                )
+            }
+    }
+
+    suspend fun createPocket(
+        pocketName: String,
+        purpose: String,
+        targetAmount: Int?,
+        targetScope: TargetScope,
+    ): String {
         val user = requireNotNull(auth.currentUser)
         val pocketRef = db.collection(POCKETS).document()
         val userRef = db.collection(USERS).document(user.uid)
         val cleanName = pocketName.cleanName().ifBlank { "My Pocket" }
         val cleanPurpose = purpose.cleanPurpose()
+        val cleanTargetAmount = targetAmount?.coerceIn(1, MAX_POCKET_TARGET_AMOUNT)
 
         val batch = db.batch()
         batch.set(
             pocketRef,
-            mapOf(
-                "name" to cleanName,
-                "purpose" to cleanPurpose,
-                "createdBy" to user.uid,
-                "createdAt" to FieldValue.serverTimestamp(),
-            ),
+            buildMap {
+                put("name", cleanName)
+                put("purpose", cleanPurpose)
+                put("createdBy", user.uid)
+                put("createdAt", FieldValue.serverTimestamp())
+                if (cleanTargetAmount != null) {
+                    put("targetAmount", cleanTargetAmount)
+                    put("targetScope", targetScope.name)
+                }
+            },
         )
         batch.set(
             userRef,
@@ -390,17 +422,32 @@ class FirebaseRepository(private val context: Context) {
         ensureMonthBoard(pocketId, SavingsBoardGenerator.currentMonthKey())
     }
 
-    suspend fun updatePocket(pocketId: String, name: String, purpose: String) {
+    suspend fun updatePocket(
+        pocketId: String,
+        name: String,
+        purpose: String,
+        targetAmount: Int?,
+        targetScope: TargetScope,
+    ) {
+        val cleanTargetAmount = targetAmount?.coerceIn(1, MAX_POCKET_TARGET_AMOUNT)
+        val update = mutableMapOf<String, Any>(
+            "name" to name.cleanName(),
+            "purpose" to purpose.cleanPurpose(),
+            "updatedAt" to FieldValue.serverTimestamp(),
+        )
+        if (cleanTargetAmount == null) {
+            update["targetAmount"] = FieldValue.delete()
+            update["targetScope"] = FieldValue.delete()
+        } else {
+            update["targetAmount"] = cleanTargetAmount
+            update["targetScope"] = targetScope.name
+        }
+
         db.collection(POCKETS)
             .document(pocketId)
-            .update(
-                mapOf(
-                    "name" to name.cleanName(),
-                    "purpose" to purpose.cleanPurpose(),
-                    "updatedAt" to FieldValue.serverTimestamp(),
-                ),
-            )
+            .update(update)
             .await()
+        ensureMonthBoard(pocketId, SavingsBoardGenerator.currentMonthKey())
     }
 
     suspend fun deletePocket(
@@ -430,6 +477,7 @@ class FirebaseRepository(private val context: Context) {
     }
 
     suspend fun ensureMonthBoard(pocketId: String, monthKey: String) {
+        val target = loadPocketTarget(pocketId)
         val monthRef = db.collection(POCKETS)
             .document(pocketId)
             .collection(MONTHS)
@@ -439,25 +487,29 @@ class FirebaseRepository(private val context: Context) {
         val cellsSnapshot = monthRef.collection(CELLS)
             .get()
             .await()
-        val hasBaseCells = cellsSnapshot.size() >= SavingsBoardGenerator.DEFAULT_CELL_COUNT
+        val cells = cellsSnapshot.documents.mapNotNull { it.toSavingsCell() }
+        val needsDefaultCells = target.amount == null &&
+            cellsSnapshot.size() < SavingsBoardGenerator.DEFAULT_CELL_COUNT
         val hasSavedDayFields = cellsSnapshot.documents
             .filter { it.getBoolean("saved") == true }
             .all { it.contains("savedDayKey") }
 
-        if (!monthExists || !hasBaseCells || !hasSavedDayFields) {
-            val amounts = SavingsBoardGenerator.generate(monthKey, pocketId)
+        if (!monthExists || needsDefaultCells || cellsSnapshot.isEmpty || !hasSavedDayFields) {
+            val amounts = if (target.amount == null) {
+                SavingsBoardGenerator.generate(monthKey, pocketId)
+            } else {
+                emptyList()
+            }
+            val savedTotal = cells.filter { it.saved }.sumOf { it.amount }
             val batch = db.batch()
             batch.set(
                 monthRef,
                 mapOf(
                     "monthKey" to monthKey,
                     "year" to YearMonth.parse(monthKey).year,
-                    "cellCount" to amounts.size,
-                    "targetTotal" to amounts.sum(),
-                    "savedTotal" to cellsSnapshot.documents
-                        .mapNotNull { it.toSavingsCell() }
-                        .filter { it.saved }
-                        .sumOf { it.amount },
+                    "cellCount" to maxOf(cellsSnapshot.size(), amounts.size),
+                    "targetTotal" to summaryTargetTotal(target, cells, amounts.sum()),
+                    "savedTotal" to savedTotal,
                     "createdAt" to FieldValue.serverTimestamp(),
                 ),
                 SetOptions.merge(),
@@ -496,6 +548,7 @@ class FirebaseRepository(private val context: Context) {
         }
 
         refreshOpenAmountsForToday(pocketId, monthKey, monthRef)
+        reconcileTargetOpenCells(pocketId, monthKey, monthRef, target)
         syncMonthSummary(pocketId, monthKey)
     }
 
@@ -536,7 +589,18 @@ class FirebaseRepository(private val context: Context) {
             val batch = db.batch()
             chunk.forEach { (cellId, amount) ->
                 documentsById[cellId]?.reference?.let { cellRef ->
-                    batch.update(cellRef, "amount", amount)
+                    batch.set(
+                        cellRef,
+                        mapOf(
+                            "amount" to amount,
+                            "saved" to false,
+                            "savedByUid" to null,
+                            "savedByName" to null,
+                            "savedAtMillis" to null,
+                            "savedDayKey" to null,
+                        ),
+                        SetOptions.merge(),
+                    )
                 }
             }
             if (chunkIndex == dailyEntries.lastIndex / (MAX_BATCH_WRITES - 1)) {
@@ -550,6 +614,95 @@ class FirebaseRepository(private val context: Context) {
                 )
             }
             batch.commit().await()
+        }
+    }
+
+    private suspend fun reconcileTargetOpenCells(
+        pocketId: String,
+        monthKey: String,
+        monthRef: DocumentReference,
+        target: PocketTarget,
+    ) {
+        val targetAmount = target.amount ?: return
+        if (monthKey != SavingsBoardGenerator.currentMonthKey()) return
+
+        val cellDocuments = monthRef.collection(CELLS).get().await().documents
+        val cells = cellDocuments
+            .mapNotNull { it.toSavingsCell() }
+            .sortedBy { it.index }
+        val remainingTarget = targetRemainingForBoard(
+            pocketId = pocketId,
+            monthKey = monthKey,
+            target = target,
+            currentCells = cells,
+        )
+        val documentById = cellDocuments.associateBy { it.id }
+        val idsToDelete = mutableSetOf<String>()
+        var openTotal = cells.filterNot { it.saved }.sumOf { it.amount }
+
+        cells.filterNot { it.saved }
+            .sortedByDescending { it.index }
+            .forEach { cell ->
+                if (openTotal - cell.amount >= remainingTarget) {
+                    idsToDelete += cell.id
+                    openTotal -= cell.amount
+                }
+            }
+
+        idsToDelete
+            .mapNotNull { documentById[it]?.reference }
+            .chunked(MAX_BATCH_WRITES)
+            .forEach { refs ->
+                val batch = db.batch()
+                refs.forEach(batch::delete)
+                batch.commit().await()
+            }
+
+        val survivingCells = cells.filterNot { it.id in idsToDelete }
+        val missingAmount = (remainingTarget - openTotal).coerceAtLeast(0)
+        val availableCells = SavingsBoardGenerator.MAX_CELL_COUNT - survivingCells.size
+        val newAmounts = SavingsBoardGenerator.dailyOpenAmountsToCoverTarget(
+            monthKey = monthKey,
+            pocketId = pocketId,
+            dayKey = SavingsBoardGenerator.todayKey(),
+            targetAmount = missingAmount,
+            startIndex = (survivingCells.maxOfOrNull { it.index } ?: -1) + 1,
+            maxCount = availableCells,
+        )
+
+        newAmounts.chunked(MAX_BATCH_WRITES).forEachIndexed { chunkIndex, chunk ->
+            val batch = db.batch()
+            val chunkStartIndex = (survivingCells.maxOfOrNull { it.index } ?: -1) + 1 +
+                newAmounts.take(chunkIndex * MAX_BATCH_WRITES).size
+            chunk.forEachIndexed { offset, amount ->
+                val index = chunkStartIndex + offset
+                val cellId = index.toString().padStart(3, '0')
+                batch.set(
+                    monthRef.collection(CELLS).document(cellId),
+                    mapOf(
+                        "index" to index,
+                        "amount" to amount,
+                        "saved" to false,
+                        "savedByUid" to null,
+                        "savedByName" to null,
+                        "savedAtMillis" to null,
+                        "savedDayKey" to null,
+                        "round" to index / SavingsBoardGenerator.DEFAULT_CELL_COUNT,
+                    ),
+                )
+            }
+            batch.commit().await()
+        }
+
+        if (idsToDelete.isNotEmpty() || newAmounts.isNotEmpty()) {
+            monthRef.set(
+                mapOf(
+                    "monthKey" to monthKey,
+                    "year" to YearMonth.parse(monthKey).year,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                ),
+                SetOptions.merge(),
+            ).await()
         }
     }
 
@@ -586,8 +739,12 @@ class FirebaseRepository(private val context: Context) {
             )
         }
         ref.update(update).await()
-        syncMonthSummary(pocketId, monthKey)
-        ensureNextRoundIfComplete(pocketId, monthKey)
+        if (loadPocketTarget(pocketId).amount == null) {
+            syncMonthSummary(pocketId, monthKey)
+            ensureNextRoundIfComplete(pocketId, monthKey)
+        } else {
+            ensureMonthBoard(pocketId, monthKey)
+        }
         return willSave
     }
 
@@ -679,6 +836,7 @@ class FirebaseRepository(private val context: Context) {
     }
 
     private suspend fun syncMonthSummary(pocketId: String, monthKey: String) {
+        val target = loadPocketTarget(pocketId)
         val monthRef = db.collection(POCKETS)
             .document(pocketId)
             .collection(MONTHS)
@@ -695,12 +853,63 @@ class FirebaseRepository(private val context: Context) {
                 "year" to YearMonth.parse(monthKey).year,
                 "cellCount" to cells.size,
                 "savedCount" to cells.count { it.saved },
-                "targetTotal" to cells.sumOf { it.amount },
+                "targetTotal" to summaryTargetTotal(target, cells),
                 "savedTotal" to cells.filter { it.saved }.sumOf { it.amount },
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
             SetOptions.merge(),
         ).await()
+    }
+
+    private suspend fun loadPocketTarget(pocketId: String): PocketTarget {
+        val snapshot = db.collection(POCKETS).document(pocketId).get().await()
+        val targetAmount = snapshot.getLong("targetAmount")
+            ?.toInt()
+            ?.takeIf { it in 1..MAX_POCKET_TARGET_AMOUNT }
+        val targetScope = snapshot.getString("targetScope").toTargetScope()
+        return PocketTarget(amount = targetAmount, scope = targetScope)
+    }
+
+    private suspend fun targetRemainingForBoard(
+        pocketId: String,
+        monthKey: String,
+        target: PocketTarget,
+        currentCells: List<SavingsCell>,
+    ): Int {
+        val targetAmount = target.amount ?: return 0
+        val currentMonthSaved = currentCells.filter { it.saved }.sumOf { it.amount }
+        val savedTotal = when (target.scope) {
+            TargetScope.MONTHLY -> currentMonthSaved
+            TargetScope.LIFETIME -> {
+                monthSummariesForPocket(pocketId)
+                    .filterNot { it.monthKey == monthKey }
+                    .sumOf { it.savedTotal } + currentMonthSaved
+            }
+        }
+        return (targetAmount - savedTotal).coerceAtLeast(0)
+    }
+
+    private suspend fun monthSummariesForPocket(pocketId: String): List<MonthSummary> {
+        return db.collection(POCKETS)
+            .document(pocketId)
+            .collection(MONTHS)
+            .get()
+            .await()
+            .documents
+            .mapNotNull { it.toMonthSummary() }
+    }
+
+    private fun summaryTargetTotal(
+        target: PocketTarget,
+        cells: List<SavingsCell>,
+        newOpenAmount: Int = 0,
+    ): Int {
+        val savedTotal = cells.filter { it.saved }.sumOf { it.amount }
+        return if (target.amount != null && target.scope == TargetScope.MONTHLY) {
+            maxOf(target.amount, savedTotal)
+        } else {
+            cells.sumOf { it.amount } + newOpenAmount
+        }
     }
 
     private suspend fun upsertUserDocument(user: FirebaseUser, fallbackName: String) {
@@ -772,6 +981,10 @@ class FirebaseRepository(private val context: Context) {
             id = id,
             name = getString("name") ?: "My Pocket",
             purpose = getString("purpose")?.cleanPurpose() ?: DEFAULT_POCKET_PURPOSE,
+            targetAmount = getLong("targetAmount")
+                ?.toInt()
+                ?.takeIf { it in 1..MAX_POCKET_TARGET_AMOUNT },
+            targetScope = getString("targetScope").toTargetScope(),
         )
     }
 
@@ -813,6 +1026,15 @@ class FirebaseRepository(private val context: Context) {
     private fun String.cleanPurpose(): String {
         return cleanName().ifBlank { DEFAULT_POCKET_PURPOSE }
     }
+
+    private fun String?.toTargetScope(): TargetScope {
+        return TargetScope.entries.firstOrNull { it.name == this } ?: TargetScope.MONTHLY
+    }
+
+    private data class PocketTarget(
+        val amount: Int?,
+        val scope: TargetScope,
+    )
 
     companion object {
         private const val USERS = "users"

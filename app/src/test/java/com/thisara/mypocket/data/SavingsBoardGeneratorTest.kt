@@ -98,4 +98,41 @@ class SavingsBoardGeneratorTest {
         assertFalse(dailyAmounts.containsKey("02"))
         assertTrue(dailyAmounts.containsKey("03"))
     }
+
+    @Test
+    fun targetAmountsCoverRequestedRemainingValue() {
+        val amounts = SavingsBoardGenerator.dailyOpenAmountsToCoverTarget(
+            monthKey = "2026-05",
+            pocketId = "pocket-a",
+            dayKey = "2026-05-17",
+            targetAmount = 1470,
+            startIndex = 0,
+            maxCount = 720,
+        )
+
+        assertTrue(amounts.sum() >= 1470)
+        assertTrue(amounts.all { it in SavingsBoardGenerator.allowedAmounts })
+    }
+
+    @Test
+    fun targetAmountsAreStableForSameDay() {
+        val first = SavingsBoardGenerator.dailyOpenAmountsToCoverTarget(
+            monthKey = "2026-05",
+            pocketId = "pocket-a",
+            dayKey = "2026-05-17",
+            targetAmount = 2000,
+            startIndex = 4,
+            maxCount = 720,
+        )
+        val second = SavingsBoardGenerator.dailyOpenAmountsToCoverTarget(
+            monthKey = "2026-05",
+            pocketId = "pocket-a",
+            dayKey = "2026-05-17",
+            targetAmount = 2000,
+            startIndex = 4,
+            maxCount = 720,
+        )
+
+        assertEquals(first, second)
+    }
 }

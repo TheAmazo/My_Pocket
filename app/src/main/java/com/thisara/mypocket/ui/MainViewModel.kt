@@ -12,12 +12,14 @@ import com.google.firebase.firestore.ListenerRegistration
 import com.thisara.mypocket.data.ActivityItem
 import com.thisara.mypocket.data.AppSettings
 import com.thisara.mypocket.data.FirebaseRepository
+import com.thisara.mypocket.data.MAX_POCKET_TARGET_AMOUNT
 import com.thisara.mypocket.data.MonthBoard
 import com.thisara.mypocket.data.MonthSummary
 import com.thisara.mypocket.data.Pocket
 import com.thisara.mypocket.data.SavingsBoardGenerator
 import com.thisara.mypocket.data.SavingsCell
 import com.thisara.mypocket.data.SettingsStore
+import com.thisara.mypocket.data.TargetScope
 import com.thisara.mypocket.data.ThemeMode
 import com.thisara.mypocket.data.UserSession
 import com.thisara.mypocket.data.canToggle
@@ -54,6 +56,7 @@ data class MainUiState(
     val pockets: List<Pocket> = emptyList(),
     val board: MonthBoard? = null,
     val yearSummaries: List<MonthSummary> = emptyList(),
+    val allMonthSummaries: List<MonthSummary> = emptyList(),
     val selectedSummaryYear: Int = SavingsBoardGenerator.currentYear(),
     val selectedSummaryMonthKey: String? = null,
     val selectedMonthSavedCells: List<SavingsCell> = emptyList(),
@@ -84,6 +87,14 @@ data class MainUiState(
     val yearlySavedTotal: Int = yearSummaries.sumOf { it.savedTotal }
     val yearlyTargetTotal: Int = yearSummaries.sumOf { it.targetTotal }
     val yearlyMissedTotal: Int = (yearlyTargetTotal - yearlySavedTotal).coerceAtLeast(0)
+    val lifetimeSavedTotal: Int
+        get() {
+            val boardSnapshot = board
+            val currentMonthKey = boardSnapshot?.monthKey
+            return allMonthSummaries
+                .filterNot { it.monthKey == currentMonthKey }
+                .sumOf { it.savedTotal } + (boardSnapshot?.savedTotal ?: 0)
+        }
     val selectedMonthSummary: MonthSummary?
         get() = selectedSummaryMonthKey?.let(::summaryForMonth)
     val activity: List<ActivityItem> = board?.cells
@@ -144,6 +155,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var pocketRegistration: ListenerRegistration? = null
     private var boardRegistration: ListenerRegistration? = null
     private var summariesRegistration: ListenerRegistration? = null
+    private var allSummariesRegistration: ListenerRegistration? = null
     private var selectedMonthRegistration: ListenerRegistration? = null
     private var activePocketId: String? = null
 
@@ -280,9 +292,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         refreshVerification(showLoading = false)
     }
 
-    fun createPocket(name: String, purpose: String) {
+    fun createPocket(
+        name: String,
+        purpose: String,
+        targetAmountText: String,
+        targetScope: TargetScope,
+    ) {
         val cleanName = name.cleanPocketName()
         val cleanPurpose = purpose.cleanPocketName()
+        val parsedTarget = parsePocketTargetAmount(targetAmountText) ?: return
+        val targetAmount = parsedTarget.amount
         if (cleanName.isBlank()) {
             mutableState.update { it.copy(message = "Give your pocket a name.") }
             return
@@ -305,14 +324,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         runLoading {
-            repository.createPocket(cleanName, cleanPurpose)
+            repository.createPocket(cleanName, cleanPurpose, targetAmount, targetScope)
             mutableState.update { it.copy(showPocketPicker = false) }
         }
     }
 
-    fun updatePocket(pocketId: String, name: String, purpose: String) {
+    fun updatePocket(
+        pocketId: String,
+        name: String,
+        purpose: String,
+        targetAmountText: String,
+        targetScope: TargetScope,
+    ) {
         val cleanName = name.cleanPocketName()
         val cleanPurpose = purpose.cleanPocketName()
+        val parsedTarget = parsePocketTargetAmount(targetAmountText) ?: return
+        val targetAmount = parsedTarget.amount
         if (cleanName.isBlank()) {
             mutableState.update { it.copy(message = "Pocket name cannot be blank.") }
             return
@@ -335,7 +362,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         runLoading {
-            repository.updatePocket(pocketId, cleanName, cleanPurpose)
+            repository.updatePocket(pocketId, cleanName, cleanPurpose, targetAmount, targetScope)
             mutableState.update { it.copy(message = "Pocket updated.") }
         }
     }
@@ -377,6 +404,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     board = null,
                     yearSummaries = emptyList(),
+                    allMonthSummaries = emptyList(),
                     selectedSummaryYear = SavingsBoardGenerator.currentYear(),
                     selectedSummaryMonthKey = null,
                     selectedMonthSavedCells = emptyList(),
@@ -618,12 +646,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     pocketRegistration?.remove()
                     boardRegistration?.remove()
                     summariesRegistration?.remove()
+                    allSummariesRegistration?.remove()
                     selectedMonthRegistration?.remove()
                     mutableState.update {
                         it.copy(
                             pocket = null,
                             board = null,
                             yearSummaries = emptyList(),
+                            allMonthSummaries = emptyList(),
                             selectedSummaryMonthKey = null,
                             selectedMonthSavedCells = emptyList(),
                             selectedMonthLoading = false,
@@ -651,6 +681,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         mutableState.update {
             it.copy(
                 yearSummaries = emptyList(),
+                allMonthSummaries = emptyList(),
                 selectedSummaryYear = currentYear,
                 selectedSummaryMonthKey = null,
                 selectedMonthSavedCells = emptyList(),
@@ -665,6 +696,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             onError = ::showError,
         )
         startSummaryListener(pocketId, currentYear)
+        startAllSummariesListener(pocketId)
 
         viewModelScope.launch {
             runCatching {
@@ -721,18 +753,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    private fun startAllSummariesListener(pocketId: String) {
+        allSummariesRegistration?.remove()
+        allSummariesRegistration = repository.listenAllMonthSummaries(
+            pocketId = pocketId,
+            onSummaries = { summaries ->
+                mutableState.update { it.copy(allMonthSummaries = summaries) }
+            },
+            onError = ::showError,
+        )
+    }
+
     private fun stopFirestoreListeners() {
         userRegistration?.remove()
         pocketsRegistration?.remove()
         pocketRegistration?.remove()
         boardRegistration?.remove()
         summariesRegistration?.remove()
+        allSummariesRegistration?.remove()
         selectedMonthRegistration?.remove()
         userRegistration = null
         pocketsRegistration = null
         pocketRegistration = null
         boardRegistration = null
         summariesRegistration = null
+        allSummariesRegistration = null
         selectedMonthRegistration = null
     }
 
@@ -808,6 +853,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun parsePocketTargetAmount(value: String): ParsedTargetAmount? {
+        val cleanValue = value.trim()
+        if (cleanValue.isBlank()) return ParsedTargetAmount(null)
+        val amount = cleanValue.toIntOrNull()
+        return when {
+            amount == null -> {
+                mutableState.update { it.copy(message = "Target amount must be a whole number.") }
+                null
+            }
+            amount <= 0 -> {
+                mutableState.update { it.copy(message = "Target amount must be greater than zero.") }
+                null
+            }
+            amount > MAX_POCKET_TARGET_AMOUNT -> {
+                mutableState.update { it.copy(message = "Target amount must be Rs. $MAX_POCKET_TARGET_AMOUNT or less.") }
+                null
+            }
+            else -> ParsedTargetAmount(amount)
+        }
+    }
+
     private fun String.cleanPocketName(): String {
         return trim().replace(Regex("\\s+"), " ")
     }
@@ -842,4 +908,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val MAX_POCKET_PURPOSE_LENGTH = 140
         const val MIN_PASSWORD_LENGTH = 8
     }
+
+    private data class ParsedTargetAmount(val amount: Int?)
 }

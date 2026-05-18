@@ -1,6 +1,6 @@
 <div align="center">
 
-  <img src="assets/my-pocket-icon.svg" width="112" alt="My Pocket icon" />
+  <img src="assets/my-pocket-icon.png" width="112" alt="My Pocket icon" />
 
 </div>
 
@@ -17,9 +17,9 @@
 ╚═╝     ╚═╝   ╚═╝       ╚═╝      ╚═════╝  ╚═════╝╚═╝  ╚═╝╚══════╝   ╚═╝
 </pre>
 
-### A glassy personal savings board for monthly goals, pocket purpose, and calm daily tracking
+### A glassy personal savings board for flexible monthly or lifetime goals
 
-Black glass UI • Clean monthly targets • Firebase sync • Smart reminders
+Black glass UI • Pocket targets • Firebase sync • Smart reminders
 
 ![Release](https://img.shields.io/github/v/release/TheAmazo/My_Pocket?style=for-the-badge&logo=github&logoColor=white&labelColor=18181B&color=03AED2)
 ![Downloads](https://img.shields.io/github/downloads/TheAmazo/My_Pocket/total?style=for-the-badge&logo=github&logoColor=white&labelColor=18181B&color=F45B26)
@@ -48,49 +48,53 @@ Black glass UI • Clean monthly targets • Firebase sync • Smart reminders
 
 <br><br>
 
-<a href="https://github.com/TheAmazo/My_Pocket/releases/download/v3.0.1/MyPocket-v3.0.1-debug.apk">
-  <img src="https://img.shields.io/badge/Download%20APK-v3.0.1-F45B26?style=for-the-badge&logo=android&logoColor=white" alt="Download My Pocket v3.0.1 APK" />
+<a href="https://github.com/TheAmazo/My_Pocket/releases/download/v4.0.0/MyPocket-v4.0.0-debug.apk">
+  <img src="https://img.shields.io/badge/Download%20APK-v4.0.0-F45B26?style=for-the-badge&logo=android&logoColor=white" alt="Download My Pocket v4.0.0 APK" />
 </a>
 
 </div>
 
-### Version 3.0.1 APK
+### Version 4.0.0 APK
 
-The version 3 GitHub release includes a test-installable APK:
+The version 4 GitHub release includes a test-installable APK:
 
 ```text
-MyPocket-v3.0.1-debug.apk
+MyPocket-v4.0.0-debug.apk
 ```
 
-Download it from [My Pocket v3.0.1](https://github.com/TheAmazo/My_Pocket/releases/tag/v3.0.1).
+Download it from [My Pocket v4.0.0](https://github.com/TheAmazo/My_Pocket/releases/tag/v4.0.0).
 
 SHA-256:
 
 ```text
-97709846449e30e798a6e86bdfa85b20b9c5c32960870d4496842a5c2d8e375f
+8709e935a8beb588409504828d155b6311d8dd8055350ad7ce2d513e6e904e1e
 ```
 
-This APK is debug-signed for version 3 testing. A production APK should be signed with a private release keystore that stays outside Git.
+This APK is debug-signed for version 4 testing. A production APK should be signed with a private release keystore that stays outside Git.
 
-### What Is New In v3.0.1
+### What Is New In v4.0.0
 
+- Pockets can now have an optional Monthly or Lifetime target amount, or stay flexible with no target.
+- Target pockets create and trim open savings cards around the remaining amount while saved history stays safe.
+- Cleaned up light and dark glass cards to remove ghost shadows and square artifacts.
+- Firestore rules now accept the new target fields and tolerate older board totals during safe owner-only refreshes.
 - Open savings cards now get fresh lower-biased random values once per day, while saved and locked history stays unchanged.
 - Android system back now follows in-app navigation on supported screens.
 - Reminder time now opens a clock picker and requests notification permission when needed.
 - A refined iOS-inspired black glass dark theme with white-blend glass cards.
-- A unified wallet logo across launcher, onboarding, pocket picker, and README.
+- A unified Savings logo across launcher, onboarding, pocket picker, and README.
 - Pocket creation now captures both pocket name and purpose.
 - Pocket headers now show the selected pocket name instead of a repeated app title.
 - Summary is cleaner with one yearly saved card above monthly history.
 - Daily reminders support both hour and minute settings.
-- Theme settings now support System follow, Light, and Dark.
+- Theme settings now support System, Light, and Dark.
 - Google sign-in error 10 now explains the Firebase SHA fingerprint fix clearly.
 
 ---
 
 ## Why My Pocket?
 
-My Pocket replaces manual savings sheets with a focused Android app. Each pocket can have its own purpose, every month gets a clean savings board, and the app keeps saved totals, remaining amounts, yearly progress, and reminders in sync without messy marks or wrong calculations.
+My Pocket replaces manual savings sheets with a focused Android app. Each pocket can have its own purpose and optional target, every month gets a clean savings board, and the app keeps saved totals, remaining amounts, yearly progress, and reminders in sync without messy marks or wrong calculations.
 
 ---
 
@@ -134,18 +138,19 @@ My Pocket replaces manual savings sheets with a focused Android app. Each pocket
 
 ## Highlights
 
-### Version 3 Experience
+### Version 4 Experience
 
 - Premium light card mode for clean daily use
-- iOS 26-inspired black glass dark mode with bright contrast
+- iOS-inspired black glass dark mode with cleaner flat cards
 - Rounded finance-style cards, buttons, inputs, and board cells
-- Theme modes for System follow, Light, and Dark
-- Unified wallet logo across launcher, onboarding, pocket picker, and README
+- Theme modes for System, Light, and Dark
+- Unified Savings logo across launcher, onboarding, pocket picker, and README
 - Password show and hide controls on password fields
 
 ### Savings Board
 
-- 30 monthly cells with daily open-card values from `20`, `50`, `100`, `500`, and `1000`
+- Flexible monthly boards with open-card values from `20`, `50`, `100`, `500`, and `1000`
+- Optional pocket targets generate the number of open cards needed for the remaining amount
 - Multiple cells can be saved on the same day
 - Open cells stay at the top so saving feels natural
 - Saved cells from previous days lock and move below open cells
@@ -155,7 +160,8 @@ My Pocket replaces manual savings sheets with a focused Android app. Each pocket
 ### Pockets
 
 - Create multiple personal pockets with a custom purpose
-- Edit pocket name and purpose safely
+- Add an optional Monthly or Lifetime target, or leave the target blank
+- Edit pocket name, purpose, and target safely
 - Delete pockets only after confirmation
 - Duplicate pocket names are blocked
 - Deleting one pocket does not damage the rest of the account
@@ -222,7 +228,7 @@ My_Pocket/
 │   ├── src/main/res/
 │   └── google-services.json        # local only, ignored by Git
 ├── assets/
-│   └── my-pocket-icon.svg
+│   └── my-pocket-icon.png
 ├── docs/
 │   └── FIREBASE_SETUP.md
 ├── Screenshots/
