@@ -275,10 +275,37 @@ class FirebaseRepository(private val context: Context) {
         onBoard: (MonthBoard) -> Unit,
         onError: (Throwable) -> Unit,
     ): ListenerRegistration {
-        return db.collection(POCKETS)
+        val monthRef = db.collection(POCKETS)
             .document(pocketId)
             .collection(MONTHS)
             .document(monthKey)
+        var cells: List<SavingsCell>? = null
+        var savedTotalOverride: Int? = null
+
+        fun emitBoardIfReady() {
+            cells?.let {
+                onBoard(
+                    MonthBoard(
+                        monthKey = monthKey,
+                        cells = it,
+                        savedTotalOverride = savedTotalOverride,
+                    ),
+                )
+            }
+        }
+
+        val monthRegistration = monthRef.addSnapshotListener { snapshot, error ->
+            if (error != null) {
+                onError(error)
+                return@addSnapshotListener
+            }
+            savedTotalOverride = snapshot
+                ?.getLong("savedTotalOverride")
+                ?.toInt()
+                ?.takeIf { it in 0..MAX_POCKET_TARGET_AMOUNT }
+            emitBoardIfReady()
+        }
+        val cellsRegistration = monthRef
             .collection(CELLS)
             .orderBy("index")
             .addSnapshotListener { snapshot, error ->
@@ -286,9 +313,16 @@ class FirebaseRepository(private val context: Context) {
                     onError(error)
                     return@addSnapshotListener
                 }
-                val cells = snapshot?.documents.orEmpty().mapNotNull { it.toSavingsCell() }
-                onBoard(MonthBoard(monthKey = monthKey, cells = cells))
+                cells = snapshot?.documents.orEmpty().mapNotNull { it.toSavingsCell() }
+                emitBoardIfReady()
             }
+
+        return object : ListenerRegistration {
+            override fun remove() {
+                monthRegistration.remove()
+                cellsRegistration.remove()
+            }
+        }
     }
 
     fun listenSavedCellsForMonth(
@@ -708,10 +742,11 @@ class FirebaseRepository(private val context: Context) {
 
     suspend fun toggleCell(pocketId: String, monthKey: String, cell: SavingsCell): Boolean {
         val user = requireNotNull(auth.currentUser)
-        val ref = db.collection(POCKETS)
+        val monthRef = db.collection(POCKETS)
             .document(pocketId)
             .collection(MONTHS)
             .document(monthKey)
+        val ref = monthRef
             .collection(CELLS)
             .document(cell.id)
 
@@ -739,6 +774,10 @@ class FirebaseRepository(private val context: Context) {
             )
         }
         ref.update(update).await()
+        applySavedTotalOverrideDelta(
+            monthRef = monthRef,
+            delta = if (willSave) cell.amount else -cell.amount,
+        )
         if (loadPocketTarget(pocketId).amount == null) {
             syncMonthSummary(pocketId, monthKey)
             ensureNextRoundIfComplete(pocketId, monthKey)
@@ -746,6 +785,71 @@ class FirebaseRepository(private val context: Context) {
             ensureMonthBoard(pocketId, monthKey)
         }
         return willSave
+    }
+
+    private suspend fun applySavedTotalOverrideDelta(monthRef: DocumentReference, delta: Int) {
+        val snapshot = monthRef.get().await()
+        val currentOverride = snapshot.getLong("savedTotalOverride")?.toInt() ?: return
+        val adjustedTotal = adjustedSavedTotalOverride(currentOverride, delta)
+        monthRef.set(
+            mapOf(
+                "savedTotalOverride" to adjustedTotal,
+                "savedTotal" to adjustedTotal,
+                "updatedAt" to FieldValue.serverTimestamp(),
+            ),
+            SetOptions.merge(),
+        ).await()
+    }
+
+    suspend fun updateMonthSavedTotal(
+        pocketId: String,
+        monthKey: String,
+        savedTotal: Int,
+    ) {
+        require(savedTotal in 0..MAX_POCKET_TARGET_AMOUNT) {
+            "Saved total must be between 0 and $MAX_POCKET_TARGET_AMOUNT."
+        }
+        val monthRef = db.collection(POCKETS)
+            .document(pocketId)
+            .collection(MONTHS)
+            .document(monthKey)
+        monthRef.set(
+            mapOf(
+                "monthKey" to monthKey,
+                "year" to YearMonth.parse(monthKey).year,
+                "savedTotalOverride" to savedTotal,
+                "savedTotal" to savedTotal,
+                "updatedAt" to FieldValue.serverTimestamp(),
+            ),
+            SetOptions.merge(),
+        ).await()
+        if (loadPocketTarget(pocketId).amount != null &&
+            monthKey == SavingsBoardGenerator.currentMonthKey()
+        ) {
+            ensureMonthBoard(pocketId, monthKey)
+        } else {
+            syncMonthSummary(pocketId, monthKey)
+        }
+    }
+
+    suspend fun clearMonthSavedTotalOverride(pocketId: String, monthKey: String) {
+        val monthRef = db.collection(POCKETS)
+            .document(pocketId)
+            .collection(MONTHS)
+            .document(monthKey)
+        monthRef.update(
+            mapOf(
+                "savedTotalOverride" to FieldValue.delete(),
+                "updatedAt" to FieldValue.serverTimestamp(),
+            ),
+        ).await()
+        if (loadPocketTarget(pocketId).amount != null &&
+            monthKey == SavingsBoardGenerator.currentMonthKey()
+        ) {
+            ensureMonthBoard(pocketId, monthKey)
+        } else {
+            syncMonthSummary(pocketId, monthKey)
+        }
     }
 
     private suspend fun ensureNextRoundIfComplete(pocketId: String, monthKey: String) {
@@ -846,6 +950,8 @@ class FirebaseRepository(private val context: Context) {
             .await()
             .documents
             .mapNotNull { it.toSavingsCell() }
+        val monthSnapshot = monthRef.get().await()
+        val savedTotal = monthSavedTotal(monthSnapshot, cells)
 
         monthRef.set(
             mapOf(
@@ -853,8 +959,8 @@ class FirebaseRepository(private val context: Context) {
                 "year" to YearMonth.parse(monthKey).year,
                 "cellCount" to cells.size,
                 "savedCount" to cells.count { it.saved },
-                "targetTotal" to summaryTargetTotal(target, cells),
-                "savedTotal" to cells.filter { it.saved }.sumOf { it.amount },
+                "targetTotal" to summaryTargetTotal(target, cells, savedTotal = savedTotal),
+                "savedTotal" to savedTotal,
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
             SetOptions.merge(),
@@ -877,7 +983,13 @@ class FirebaseRepository(private val context: Context) {
         currentCells: List<SavingsCell>,
     ): Int {
         val targetAmount = target.amount ?: return 0
-        val currentMonthSaved = currentCells.filter { it.saved }.sumOf { it.amount }
+        val currentMonthSnapshot = db.collection(POCKETS)
+            .document(pocketId)
+            .collection(MONTHS)
+            .document(monthKey)
+            .get()
+            .await()
+        val currentMonthSaved = monthSavedTotal(currentMonthSnapshot, currentCells)
         val savedTotal = when (target.scope) {
             TargetScope.MONTHLY -> currentMonthSaved
             TargetScope.LIFETIME -> {
@@ -903,13 +1015,21 @@ class FirebaseRepository(private val context: Context) {
         target: PocketTarget,
         cells: List<SavingsCell>,
         newOpenAmount: Int = 0,
+        savedTotal: Int = cells.filter { it.saved }.sumOf { it.amount },
     ): Int {
-        val savedTotal = cells.filter { it.saved }.sumOf { it.amount }
         return if (target.amount != null && target.scope == TargetScope.MONTHLY) {
             maxOf(target.amount, savedTotal)
         } else {
             cells.sumOf { it.amount } + newOpenAmount
         }
+    }
+
+    private fun monthSavedTotal(monthSnapshot: DocumentSnapshot, cells: List<SavingsCell>): Int {
+        return monthSnapshot
+            .getLong("savedTotalOverride")
+            ?.toInt()
+            ?.takeIf { it in 0..MAX_POCKET_TARGET_AMOUNT }
+            ?: cells.filter { it.saved }.sumOf { it.amount }
     }
 
     private suspend fun upsertUserDocument(user: FirebaseUser, fallbackName: String) {
@@ -1005,10 +1125,15 @@ class FirebaseRepository(private val context: Context) {
     private fun DocumentSnapshot.toMonthSummary(): MonthSummary? {
         if (!exists()) return null
         val monthKey = getString("monthKey") ?: id
+        val savedTotal = getLong("savedTotalOverride")
+            ?.toInt()
+            ?.takeIf { it in 0..MAX_POCKET_TARGET_AMOUNT }
+            ?: getLong("savedTotal")?.toInt()
+            ?: 0
         return MonthSummary(
             monthKey = monthKey,
             targetTotal = getLong("targetTotal")?.toInt() ?: 0,
-            savedTotal = getLong("savedTotal")?.toInt() ?: 0,
+            savedTotal = savedTotal,
             savedCount = getLong("savedCount")?.toInt() ?: 0,
             cellCount = getLong("cellCount")?.toInt() ?: 0,
         )

@@ -41,9 +41,11 @@ data class SavingsCell(
 data class MonthBoard(
     val monthKey: String,
     val cells: List<SavingsCell>,
+    val savedTotalOverride: Int? = null,
 ) {
     val targetTotal: Int = cells.sumOf { it.amount }
-    val savedTotal: Int = cells.filter { it.saved }.sumOf { it.amount }
+    val cellSavedTotal: Int = cells.filter { it.saved }.sumOf { it.amount }
+    val savedTotal: Int = savedTotalOverride ?: cellSavedTotal
     val remainingTotal: Int = targetTotal - savedTotal
     val savedCount: Int = cells.count { it.saved }
     val isComplete: Boolean = cells.isNotEmpty() && savedCount == cells.size
@@ -71,6 +73,10 @@ fun SavingsCell.isLocked(todayKey: String): Boolean {
 
 fun SavingsCell.canToggle(todayKey: String): Boolean {
     return !isLocked(todayKey)
+}
+
+fun adjustedSavedTotalOverride(currentTotal: Int, delta: Int): Int {
+    return (currentTotal + delta).coerceIn(0, MAX_POCKET_TARGET_AMOUNT)
 }
 
 fun SavingsCell.sortRank(todayKey: String): Int {

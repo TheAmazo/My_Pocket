@@ -63,4 +63,32 @@ class SavingsCellRulesTest {
 
         assertEquals(listOf("open", "saved-today", "locked"), sorted.map { it.id })
     }
+
+    @Test
+    fun monthBoardSavedTotalCanUseManualOverride() {
+        val board = MonthBoard(
+            monthKey = "2026-05",
+            cells = listOf(
+                SavingsCell(id = "00", index = 0, amount = 100, saved = true),
+                SavingsCell(id = "01", index = 1, amount = 500, saved = true),
+                SavingsCell(id = "02", index = 2, amount = 50),
+            ),
+            savedTotalOverride = 550,
+        )
+
+        assertEquals(600, board.cellSavedTotal)
+        assertEquals(550, board.savedTotal)
+        assertEquals(2, board.savedCount)
+    }
+
+    @Test
+    fun manualSavedTotalAddsAndSubtractsCardAmount() {
+        assertEquals(4050, adjustedSavedTotalOverride(currentTotal = 4000, delta = 50))
+        assertEquals(3950, adjustedSavedTotalOverride(currentTotal = 4000, delta = -50))
+    }
+
+    @Test
+    fun manualSavedTotalCannotGoBelowZero() {
+        assertEquals(0, adjustedSavedTotalOverride(currentTotal = 20, delta = -100))
+    }
 }
