@@ -431,6 +431,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun updateMonthSavedTotal(monthKey: String, savedTotal: Int) {
+        val pocketId = activePocketId ?: mutableState.value.pocket?.id ?: return
+        if (savedTotal !in 0..MAX_POCKET_TARGET_AMOUNT) {
+            mutableState.update {
+                it.copy(message = "Saved total must be between 0 and $MAX_POCKET_TARGET_AMOUNT.")
+            }
+            return
+        }
+
+        runLoading(showLoading = false) {
+            repository.updateMonthSavedTotal(pocketId, monthKey, savedTotal)
+            mutableState.update { it.copy(message = "Monthly saved total updated.") }
+        }
+    }
+
+    fun clearMonthSavedTotalOverride(monthKey: String) {
+        val pocketId = activePocketId ?: mutableState.value.pocket?.id ?: return
+        runLoading(showLoading = false) {
+            repository.clearMonthSavedTotalOverride(pocketId, monthKey)
+            mutableState.update { it.copy(message = "Monthly saved total reset.") }
+        }
+    }
+
     fun repairCurrentBoard() {
         val pocketId = mutableState.value.pocket?.id ?: return
         runLoading {

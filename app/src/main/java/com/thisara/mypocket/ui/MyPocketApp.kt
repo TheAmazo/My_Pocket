@@ -129,6 +129,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.thisara.mypocket.R
 import com.thisara.mypocket.data.AppSettings
 import com.thisara.mypocket.data.AvatarCropper
+import com.thisara.mypocket.data.MAX_POCKET_TARGET_AMOUNT
 import com.thisara.mypocket.data.MonthBoard
 import com.thisara.mypocket.data.MonthSummary
 import com.thisara.mypocket.data.Pocket
@@ -252,6 +253,8 @@ fun MyPocketApp(viewModel: MainViewModel) {
                         onTab = viewModel::setTab,
                         onShowPockets = viewModel::showPocketPicker,
                         onToggleCell = viewModel::toggleCell,
+                        onUpdateMonthSavedTotal = viewModel::updateMonthSavedTotal,
+                        onClearMonthSavedTotalOverride = viewModel::clearMonthSavedTotalOverride,
                         onRepairBoard = viewModel::repairCurrentBoard,
                         onReminderEnabled = viewModel::setRemindersEnabled,
                         onReminderHour = viewModel::setReminderHour,
@@ -933,6 +936,8 @@ private fun HomeScreen(
     onTab: (HomeTab) -> Unit,
     onShowPockets: () -> Unit,
     onToggleCell: (SavingsCell) -> Unit,
+    onUpdateMonthSavedTotal: (String, Int) -> Unit,
+    onClearMonthSavedTotalOverride: (String) -> Unit,
     onRepairBoard: () -> Unit,
     onReminderEnabled: (Boolean) -> Unit,
     onReminderHour: (Int) -> Unit,
@@ -949,6 +954,8 @@ private fun HomeScreen(
     onDeleteAccountWithPassword: (String) -> Unit,
     onDeleteGoogleAccount: () -> Unit,
 ) {
+    var savedTotalEditBoard by remember { mutableStateOf<MonthBoard?>(null) }
+
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val useRail = maxWidth >= 720.dp
         if (useRail) {
@@ -961,6 +968,7 @@ private fun HomeScreen(
                     onTab = onTab,
                     onShowPockets = onShowPockets,
                     onToggleCell = onToggleCell,
+                    onEditMonthSavedTotal = { savedTotalEditBoard = it },
                     onRepairBoard = onRepairBoard,
                     onReminderEnabled = onReminderEnabled,
                     onReminderHour = onReminderHour,
@@ -987,6 +995,7 @@ private fun HomeScreen(
                 onTab = onTab,
                 onShowPockets = onShowPockets,
                 onToggleCell = onToggleCell,
+                onEditMonthSavedTotal = { savedTotalEditBoard = it },
                 onRepairBoard = onRepairBoard,
                 onReminderEnabled = onReminderEnabled,
                 onReminderHour = onReminderHour,
@@ -1006,6 +1015,21 @@ private fun HomeScreen(
             )
         }
     }
+
+    savedTotalEditBoard?.let { board ->
+        MonthSavedTotalDialog(
+            board = board,
+            onSave = { savedTotal ->
+                onUpdateMonthSavedTotal(board.monthKey, savedTotal)
+                savedTotalEditBoard = null
+            },
+            onReset = {
+                onClearMonthSavedTotalOverride(board.monthKey)
+                savedTotalEditBoard = null
+            },
+            onDismiss = { savedTotalEditBoard = null },
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1017,6 +1041,7 @@ private fun HomeScaffold(
     onTab: (HomeTab) -> Unit,
     onShowPockets: () -> Unit,
     onToggleCell: (SavingsCell) -> Unit,
+    onEditMonthSavedTotal: (MonthBoard) -> Unit,
     onRepairBoard: () -> Unit,
     onReminderEnabled: (Boolean) -> Unit,
     onReminderHour: (Int) -> Unit,
@@ -1061,6 +1086,7 @@ private fun HomeScaffold(
                 state = state,
                 settings = settings,
                 onToggleCell = onToggleCell,
+                onEditMonthSavedTotal = onEditMonthSavedTotal,
                 onRepairBoard = onRepairBoard,
                 onReminderEnabled = onReminderEnabled,
                 onReminderHour = onReminderHour,
@@ -1172,6 +1198,7 @@ private fun HomeTabContent(
     state: MainUiState,
     settings: AppSettings,
     onToggleCell: (SavingsCell) -> Unit,
+    onEditMonthSavedTotal: (MonthBoard) -> Unit,
     onRepairBoard: () -> Unit,
     onReminderEnabled: (Boolean) -> Unit,
     onReminderHour: (Int) -> Unit,
@@ -1195,6 +1222,7 @@ private fun HomeTabContent(
             todayKey = state.todayKey,
             lifetimeSavedTotal = state.lifetimeSavedTotal,
             onToggleCell = onToggleCell,
+            onEditMonthSavedTotal = onEditMonthSavedTotal,
             onRepairBoard = onRepairBoard,
         )
         HomeTab.History -> SummaryScreen(
@@ -1251,6 +1279,7 @@ private fun BoardScreen(
     todayKey: String,
     lifetimeSavedTotal: Int,
     onToggleCell: (SavingsCell) -> Unit,
+    onEditMonthSavedTotal: (MonthBoard) -> Unit,
     onRepairBoard: () -> Unit,
 ) {
     if (board == null) {
@@ -1357,6 +1386,7 @@ private fun BoardScreen(
                     pocket = pocket,
                     board = board,
                     lifetimeSavedTotal = lifetimeSavedTotal,
+                    onEditSavedTotal = { onEditMonthSavedTotal(board) },
                 )
             }
             items(sortedCells, key = { it.id }) { cell ->
@@ -1393,6 +1423,7 @@ private fun BoardSummary(
     pocket: Pocket?,
     board: MonthBoard,
     lifetimeSavedTotal: Int,
+    onEditSavedTotal: () -> Unit,
 ) {
     val style = PocketTheme.colors
     val targetAmount = pocket?.targetAmount
@@ -1418,7 +1449,7 @@ private fun BoardSummary(
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         SummaryMetricRow(
             metrics = listOf(
-                SummaryMetric("Saved", "Rs. $savedTotal", PocketBlue),
+                SummaryMetric("Saved", "Rs. $savedTotal", PocketBlue, onClick = onEditSavedTotal),
                 SummaryMetric("Remaining", "Rs. $remainingTotal", PocketRose),
                 SummaryMetric("Cells", "${board.savedCount}/${board.cells.size}", PocketOrange),
             ),
@@ -1444,6 +1475,7 @@ private data class SummaryMetric(
     val label: String,
     val value: String,
     val color: Color,
+    val onClick: (() -> Unit)? = null,
 )
 
 @Composable
@@ -1456,6 +1488,7 @@ private fun SummaryMetricRow(metrics: List<SummaryMetric>, modifier: Modifier = 
                         label = metric.label,
                         value = metric.value,
                         color = metric.color,
+                        onClick = metric.onClick,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -1467,6 +1500,7 @@ private fun SummaryMetricRow(metrics: List<SummaryMetric>, modifier: Modifier = 
                         label = metric.label,
                         value = metric.value,
                         color = metric.color,
+                        onClick = metric.onClick,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -1476,18 +1510,104 @@ private fun SummaryMetricRow(metrics: List<SummaryMetric>, modifier: Modifier = 
 }
 
 @Composable
-private fun SummaryTile(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
+private fun SummaryTile(
+    label: String,
+    value: String,
+    color: Color,
+    onClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
     GlassSurface(
         shape = GlassCompactShape,
         shadowElevation = 0.dp,
-        modifier = modifier,
+        modifier = if (onClick == null) modifier else modifier.clickable(onClick = onClick),
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            StatusDot(color)
+            Row(
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                StatusDot(color)
+                if (onClick != null) {
+                    Icon(
+                        Icons.Rounded.Edit,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
             Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black)
         }
     }
+}
+
+@Composable
+private fun MonthSavedTotalDialog(
+    board: MonthBoard,
+    onSave: (Int) -> Unit,
+    onReset: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var amountText by remember(board.monthKey, board.savedTotal) {
+        mutableStateOf(board.savedTotal.toString())
+    }
+    val amount = amountText.trim().toIntOrNull()
+    val validAmount = amount != null && amount in 0..MAX_POCKET_TARGET_AMOUNT
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("Edit monthly saved", fontWeight = FontWeight.Black)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "This changes the Saved card for ${board.monthKey}.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = amountText,
+                    onValueChange = { value ->
+                        amountText = value.filter { it.isDigit() }.take(6)
+                    },
+                    label = { Text("Saved amount") },
+                    prefix = { Text("Rs. ") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError = amountText.isNotBlank() && !validAmount,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Actual saved cards total: Rs. ${board.cellSavedTotal}",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { amount?.let(onSave) },
+                enabled = validAmount,
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel")
+                }
+                if (board.savedTotalOverride != null) {
+                    TextButton(onClick = onReset) {
+                        Text("Reset")
+                    }
+                }
+            }
+        },
+    )
 }
 
 @Composable

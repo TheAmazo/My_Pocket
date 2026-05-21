@@ -97,6 +97,7 @@ service cloud.firestore {
           'targetTotal',
           'savedCount',
           'savedTotal',
+          'savedTotalOverride',
           'openAmountsDayKey',
           'createdAt',
           'updatedAt'
@@ -110,6 +111,9 @@ service cloud.firestore {
         && data.targetTotal >= 0
         && data.targetTotal <= 720000
         && optionalString(data, 'openAmountsDayKey', 10)
+        && (!hasField(data, 'savedTotalOverride')
+          || data.savedTotalOverride == null
+          || (data.savedTotalOverride is int && data.savedTotalOverride >= 0 && data.savedTotalOverride <= 720000))
         && (!hasField(data, 'savedCount')
           || (data.savedCount is int && data.savedCount >= 0 && data.savedCount <= 720))
         && (!hasField(data, 'savedTotal')
