@@ -158,6 +158,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var allSummariesRegistration: ListenerRegistration? = null
     private var selectedMonthRegistration: ListenerRegistration? = null
     private var activePocketId: String? = null
+    private val attemptedAutoBoardRepairs = mutableSetOf<String>()
 
     init {
         reminderScheduler.createNotificationChannel()
@@ -442,15 +443,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         runLoading(showLoading = false) {
             repository.updateMonthSavedTotal(pocketId, monthKey, savedTotal)
-            mutableState.update { it.copy(message = "Monthly saved total updated.") }
+            mutableState.update {
+                it.withMonthSavedTotal(
+                    monthKey = monthKey,
+                    savedTotal = savedTotal,
+                    savedTotalOverride = savedTotal,
+                ).copy(message = "Monthly saved total updated.")
+            }
         }
     }
 
     fun clearMonthSavedTotalOverride(monthKey: String) {
         val pocketId = activePocketId ?: mutableState.value.pocket?.id ?: return
+        val resetTotal = mutableState.value.board
+            ?.takeIf { it.monthKey == monthKey }
+            ?.cellSavedTotal
+            ?: 0
         runLoading(showLoading = false) {
-            repository.clearMonthSavedTotalOverride(pocketId, monthKey)
-            mutableState.update { it.copy(message = "Monthly saved total reset.") }
+            repository.clearMonthSavedTotalOverride(pocketId, monthKey, resetTotal)
+            mutableState.update {
+                it.withMonthSavedTotal(
+                    monthKey = monthKey,
+                    savedTotal = resetTotal,
+                    savedTotalOverride = null,
+                ).copy(message = "Monthly saved total reset.")
+            }
         }
     }
 
@@ -700,6 +717,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         boardRegistration?.remove()
         selectedMonthRegistration?.remove()
         selectedMonthRegistration = null
+        attemptedAutoBoardRepairs.clear()
         val currentYear = SavingsBoardGenerator.currentYear()
         mutableState.update {
             it.copy(
@@ -730,7 +748,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         monthKey = monthKey,
                         onBoard = { board ->
                             mutableState.update { it.copy(board = board, loading = false) }
-                            if (board.cells.isEmpty()) {
+                            val repairKey = "$pocketId:$monthKey"
+                            if (board.cells.isEmpty() && attemptedAutoBoardRepairs.add(repairKey)) {
                                 viewModelScope.launch {
                                     runCatching {
                                         withTimeout(FIREBASE_ACTION_TIMEOUT_MILLIS) {
@@ -804,6 +823,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         selectedMonthRegistration = null
     }
 
+    private fun MainUiState.withMonthSavedTotal(
+        monthKey: String,
+        savedTotal: Int,
+        savedTotalOverride: Int?,
+    ): MainUiState {
+        fun updateSummaries(summaries: List<MonthSummary>): List<MonthSummary> {
+            return summaries.map { summary ->
+                if (summary.monthKey == monthKey) summary.copy(savedTotal = savedTotal) else summary
+            }
+        }
+
+        return copy(
+            board = board?.let { board ->
+                if (board.monthKey == monthKey) {
+                    board.copy(savedTotalOverride = savedTotalOverride)
+                } else {
+                    board
+                }
+            },
+            yearSummaries = updateSummaries(yearSummaries),
+            allMonthSummaries = updateSummaries(allMonthSummaries),
+        )
+    }
+
     private fun runLoading(showLoading: Boolean = true, block: suspend () -> Unit) {
         viewModelScope.launch {
             if (showLoading) mutableState.update { it.copy(loading = true, message = null) }
@@ -848,6 +891,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             this is FirebaseFirestoreException && code == FirebaseFirestoreException.Code.PERMISSION_DENIED -> {
                 "You do not have permission for this pocket. Check your account or Firestore rules."
+            }
+            this is FirebaseFirestoreException && code == FirebaseFirestoreException.Code.RESOURCE_EXHAUSTED -> {
+                "Firebase quota is exhausted, so this pocket cannot create savings cards now. Try later or check Firebase usage."
             }
             else -> message ?: "Something went wrong. Try again."
         }
