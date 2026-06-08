@@ -48,29 +48,36 @@ Black glass UI • Pocket targets • Firebase sync • Smart reminders
 
 <br><br>
 
-<a href="https://github.com/TheAmazo/My_Pocket/releases/download/v4.1.0/MyPocket-v4.1.0-debug.apk">
-  <img src="https://img.shields.io/badge/Download%20APK-v4.1.0-F45B26?style=for-the-badge&logo=android&logoColor=white" alt="Download My Pocket v4.1.0 APK" />
+<a href="https://github.com/TheAmazo/My_Pocket/releases/download/v4.1.1/MyPocket-v4.1.1-debug.apk">
+  <img src="https://img.shields.io/badge/Download%20APK-v4.1.1-F45B26?style=for-the-badge&logo=android&logoColor=white" alt="Download My Pocket v4.1.1 APK" />
 </a>
 
 </div>
 
-### Version 4.1.0 APK
+### Version 4.1.1 APK
 
-The version 4.1 GitHub release includes a test-installable APK:
+The version 4.1.1 GitHub release includes a test-installable APK:
 
 ```text
-MyPocket-v4.1.0-debug.apk
+MyPocket-v4.1.1-debug.apk
 ```
 
-Download it from [My Pocket v4.1.0](https://github.com/TheAmazo/My_Pocket/releases/tag/v4.1.0).
+Download it from [My Pocket v4.1.1](https://github.com/TheAmazo/My_Pocket/releases/tag/v4.1.1).
 
 SHA-256:
 
 ```text
-bba4924cd29622e74295a2a8173c6c32a713c14f4d3ad92f2dc54f7a4fd16100
+62afc6604f9d1c8e443cd2e6f8e31b9d9cfa925c17b192357c8bb0755b9f89bb
 ```
 
-This APK is debug-signed for version 4.1 testing. A production APK should be signed with a private release keystore that stays outside Git.
+This APK is debug-signed for version 4.1.1 testing. A production APK should be signed with a private release keystore that stays outside Git.
+
+### What Is New In v4.1.1
+
+- Fixed edited Saved amounts timing out before Firestore saved the new monthly total.
+- Target boards now show generated open cards even when Firestore has no persisted open-card documents yet.
+- Saving a generated open card now creates only that one card document instead of requiring a full board repair.
+- Lifetime target boards now show the current month Saved and Remaining values clearly.
 
 ### What Is New In v4.1.0
 

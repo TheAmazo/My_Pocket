@@ -133,6 +133,7 @@ import com.thisara.mypocket.data.MAX_POCKET_TARGET_AMOUNT
 import com.thisara.mypocket.data.MonthBoard
 import com.thisara.mypocket.data.MonthSummary
 import com.thisara.mypocket.data.Pocket
+import com.thisara.mypocket.data.SavingsBoardGenerator
 import com.thisara.mypocket.data.SavingsCell
 import com.thisara.mypocket.data.TargetScope
 import com.thisara.mypocket.data.ThemeMode
@@ -1272,6 +1273,69 @@ private fun HomeTab.icon() = when (this) {
     HomeTab.Profile -> Icons.Rounded.AccountCircle
 }
 
+private fun boardDisplayCells(
+    pocket: Pocket?,
+    board: MonthBoard,
+    todayKey: String,
+): List<SavingsCell> {
+    val generated = generatedOpenCells(
+        pocket = pocket,
+        board = board,
+        todayKey = todayKey,
+    )
+    return if (generated.isEmpty()) board.cells else board.cells + generated
+}
+
+private fun generatedOpenCells(
+    pocket: Pocket?,
+    board: MonthBoard,
+    todayKey: String,
+): List<SavingsCell> {
+    val pocketId = pocket?.id ?: return emptyList()
+    val existingCells = board.cells
+    val nextIndex = (existingCells.maxOfOrNull { it.index } ?: -1) + 1
+    val availableCells = SavingsBoardGenerator.MAX_CELL_COUNT - existingCells.size
+    if (availableCells <= 0) return emptyList()
+
+    val targetAmount = pocket.targetAmount
+    val amounts = if (targetAmount != null) {
+        val existingOpenTotal = existingCells.filterNot { it.saved }.sumOf { it.amount }
+        val missingAmount = (targetAmount - board.savedTotal - existingOpenTotal).coerceAtLeast(0)
+        SavingsBoardGenerator.dailyOpenAmountsToCoverTarget(
+            monthKey = board.monthKey,
+            pocketId = pocketId,
+            dayKey = todayKey,
+            targetAmount = missingAmount,
+            startIndex = nextIndex,
+            maxCount = availableCells,
+        )
+    } else {
+        val missingCount = SavingsBoardGenerator.DEFAULT_CELL_COUNT - existingCells.size
+        if (missingCount <= 0) {
+            emptyList()
+        } else {
+            List(missingCount.coerceAtMost(availableCells)) { offset ->
+                SavingsBoardGenerator.dailyOpenAmount(
+                    monthKey = board.monthKey,
+                    pocketId = pocketId,
+                    dayKey = todayKey,
+                    cellIndex = nextIndex + offset,
+                )
+            }
+        }
+    }
+
+    return amounts.mapIndexed { offset, amount ->
+        val index = nextIndex + offset
+        SavingsCell(
+            id = index.toString().padStart(3, '0'),
+            index = index,
+            amount = amount,
+            persisted = false,
+        )
+    }
+}
+
 @Composable
 private fun BoardScreen(
     pocket: Pocket?,
@@ -1317,43 +1381,15 @@ private fun BoardScreen(
         return
     }
 
-    if (board.cells.isEmpty()) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .padding(20.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            SectionSurface {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    StatusDot(PocketYellow)
-                    Text(
-                        "Monthly board is not ready",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Black,
-                    )
-                    Text(
-                        "The pocket loaded, but the 30 savings cells are missing. Tap retry to create them.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                    )
-                    Button(onClick = onRepairBoard) {
-                        Icon(Icons.Rounded.Refresh, contentDescription = null)
-                        Spacer(Modifier.size(8.dp))
-                        Text("Retry")
-                    }
-                }
-            }
-        }
-        return
+    val displayCells = remember(pocket, board, todayKey) {
+        boardDisplayCells(
+            pocket = pocket,
+            board = board,
+            todayKey = todayKey,
+        )
     }
-
-    val sortedCells = remember(board.cells, todayKey) {
-        board.cells.sortedWith(
+    val sortedCells = remember(displayCells, todayKey) {
+        displayCells.sortedWith(
             compareBy<SavingsCell> { it.sortRank(todayKey) }
                 .thenBy { it.index },
         )
@@ -1385,19 +1421,86 @@ private fun BoardScreen(
                 BoardSummary(
                     pocket = pocket,
                     board = board,
+                    displayCells = displayCells,
                     lifetimeSavedTotal = lifetimeSavedTotal,
                     onEditSavedTotal = { onEditMonthSavedTotal(board) },
                 )
             }
-            items(sortedCells, key = { it.id }) { cell ->
-                SavingsCellTile(
-                    cell = cell,
-                    todayKey = todayKey,
-                    onClick = { onToggleCell(cell) },
-                )
+            if (sortedCells.isEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    EmptyBoardRepairCard(
+                        pocket = pocket,
+                        board = board,
+                        lifetimeSavedTotal = lifetimeSavedTotal,
+                        onRepairBoard = onRepairBoard,
+                    )
+                }
+            } else {
+                items(sortedCells, key = { it.id }) { cell ->
+                    SavingsCellTile(
+                        cell = cell,
+                        todayKey = todayKey,
+                        onClick = { onToggleCell(cell) },
+                    )
+                }
             }
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Spacer(Modifier.height(16.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyBoardRepairCard(
+    pocket: Pocket?,
+    board: MonthBoard,
+    lifetimeSavedTotal: Int,
+    onRepairBoard: () -> Unit,
+) {
+    val targetAmount = pocket?.targetAmount
+    val targetScope = pocket?.targetScope ?: TargetScope.MONTHLY
+    val monthSavedTotal = board.savedTotal
+    val targetIsCovered = targetAmount != null && monthSavedTotal >= targetAmount
+    val title = if (targetIsCovered) {
+        "Target is complete"
+    } else {
+        "Savings cells are being repaired"
+    }
+    val body = if (targetIsCovered) {
+        if (targetScope == TargetScope.LIFETIME) {
+            "This month saved is Rs. $monthSavedTotal. Lifetime saved is Rs. $lifetimeSavedTotal."
+        } else {
+            "This pocket has no open cards because the target is already covered."
+        }
+    } else {
+        "The month loaded without savings cards. Tap retry to rebuild this pocket's current board."
+    }
+
+    SectionSurface {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            StatusDot(if (targetIsCovered) PocketBlue else PocketYellow)
+            Text(
+                title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Black,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                body,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+            if (!targetIsCovered) {
+                Button(onClick = onRepairBoard) {
+                    Icon(Icons.Rounded.Refresh, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text("Retry")
+                }
             }
         }
     }
@@ -1422,26 +1525,23 @@ private fun TodayBanner(todayKey: String) {
 private fun BoardSummary(
     pocket: Pocket?,
     board: MonthBoard,
+    displayCells: List<SavingsCell>,
     lifetimeSavedTotal: Int,
     onEditSavedTotal: () -> Unit,
 ) {
     val style = PocketTheme.colors
     val targetAmount = pocket?.targetAmount
     val targetScope = pocket?.targetScope ?: TargetScope.MONTHLY
+    val monthSavedTotal = board.savedTotal
     val targetTotal = when {
-        targetAmount == null -> board.targetTotal
-        targetScope == TargetScope.MONTHLY -> maxOf(targetAmount, board.savedTotal)
-        else -> maxOf(targetAmount, lifetimeSavedTotal)
+        targetAmount == null -> displayCells.sumOf { it.amount }
+        targetScope == TargetScope.MONTHLY -> maxOf(targetAmount, monthSavedTotal)
+        else -> maxOf(targetAmount, monthSavedTotal)
     }
-    val savedTotal = if (targetAmount != null && targetScope == TargetScope.LIFETIME) {
-        lifetimeSavedTotal
-    } else {
-        board.savedTotal
-    }
-    val remainingTotal = (targetTotal - savedTotal).coerceAtLeast(0)
-    val progress = if (targetTotal == 0) 0f else savedTotal.toFloat() / targetTotal
+    val remainingTotal = (targetTotal - monthSavedTotal).coerceAtLeast(0)
+    val progress = if (targetTotal == 0) 0f else monthSavedTotal.toFloat() / targetTotal
     val targetLabel = when {
-        targetAmount == null -> "${board.monthKey} flexible board: Rs. ${board.targetTotal}"
+        targetAmount == null -> "${board.monthKey} flexible board: Rs. ${displayCells.sumOf { it.amount }}"
         targetScope == TargetScope.MONTHLY -> "${board.monthKey} monthly target: Rs. $targetAmount"
         else -> "Lifetime target: Rs. $targetAmount"
     }
@@ -1449,9 +1549,9 @@ private fun BoardSummary(
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         SummaryMetricRow(
             metrics = listOf(
-                SummaryMetric("Saved", "Rs. $savedTotal", PocketBlue, onClick = onEditSavedTotal),
+                SummaryMetric("Saved", "Rs. $monthSavedTotal", PocketBlue, onClick = onEditSavedTotal),
                 SummaryMetric("Remaining", "Rs. $remainingTotal", PocketRose),
-                SummaryMetric("Cells", "${board.savedCount}/${board.cells.size}", PocketOrange),
+                SummaryMetric("Cells", "${board.savedCount}/${displayCells.size}", PocketOrange),
             ),
         )
         LinearProgressIndicator(
