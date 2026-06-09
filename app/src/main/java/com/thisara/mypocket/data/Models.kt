@@ -36,6 +36,7 @@ data class SavingsCell(
     val savedByName: String? = null,
     val savedAtMillis: Long? = null,
     val savedDayKey: String? = null,
+    val persisted: Boolean = true,
 )
 
 data class MonthBoard(

@@ -13,8 +13,8 @@ android {
         applicationId = "com.thisara.mypocket"
         minSdk = 24
         targetSdk = 36
-        versionCode = 6
-        versionName = "4.1.0"
+        versionCode = 7
+        versionName = "4.1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
